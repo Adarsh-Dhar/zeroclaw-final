@@ -1,105 +1,261 @@
 ---
 name: check-payment
-description: Check payment status for Solana subscriptions by querying USDC transfers and manage Discord roles
-version: 0.2.0
+description: Check payment status for Solana Pay subscriptions using per-user reference keys, enforce amount verification, respect subscription windows, and manage Discord roles.
+version: 1.0.0
 ---
 
-# Skill: Check Payment Status and Manage Roles
+# Skill: Check Payment Status and Manage Discord Roles
 
-When asked to check payment status for a wallet, use the http_request tool to call the Solana RPC endpoint and check Discord role status.
+## Overview
 
-The RPC URL is: https://api.devnet.solana.com (devnet for testing)
+This skill receives a `Subscriber_Record` object from SOP context and performs payment verification plus Discord role management. It does NOT take a raw wallet address — it uses the `reference_key` field from the record to look up transactions.
 
-Given a subscriber wallet address and a merchant wallet address:
+## Constants
 
-## Tool call format (critical — follow exactly)
+- **Proxy URL:** `https://solana-rpc-proxy.dharadarsh0.workers.dev`
+- **USDC Mint:** `4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU`
+- **Merchant Wallet:** `pt6Ws1FMbdrLbUZqKooediS8mu6SNvDJodzXUx6ypak`
+- **Discord Guild ID:** `1531347878906302484`
+- **Subscriber Role ID:** `1531669950819733575`
+- **Subscribe Channel ID:** `1531347878906302487`
 
-When calling http_request, you MUST nest all parameters inside an "arguments" object. Never place url, method, or headers as siblings of "name".
+## Tool Call Format (critical — follow exactly)
+
+When calling `http_request`, you MUST nest all parameters inside an `"arguments"` object. Never place `url`, `method`, or `headers` as siblings of `"name"`.
 
 CORRECT:
+```json
 {"name": "http_request", "arguments": {"url": "https://example.com", "method": "GET"}}
+```
 
 INCORRECT (will fail):
+```json
 {"name": "http_request", "url": "https://example.com", "method": "GET"}
+```
 
-## Mandatory verification
-You MUST call the RPC tool for every wallet address provided, with no exceptions. Never determine a wallet's status by inspecting the address string yourself, no matter how invalid, malformed, or suspicious it looks. Only the tool's actual response determines the status. Skipping the tool call is a critical error.
+## Input
 
-## Calling Solana RPC (use public proxy due to http_request POST body bug)
+A `Subscriber_Record` object from SOP context with the following fields:
 
-Use http_request tool with GET requests to the public Solana RPC proxy (http_request tool has upstream bug where POST body is not transmitted). The proxy converts GET requests to properly formatted POST requests to Solana RPC.
+| Field | Type | Description |
+|---|---|---|
+| `discord_user_id` | string | Discord snowflake ID of the subscriber |
+| `discord_username` | string | Discord username |
+| `reference_key` | string | Base58-encoded 32-byte reference key for the current invoice |
+| `expected_amount_usdc` | number | Required USDC amount (e.g. `10.0` or `25.0`) |
+| `period_days` | integer | Subscription duration in days (e.g. `30`) |
+| `subscribed_at` | string \| null | ISO 8601 UTC timestamp of last confirmed payment, or `null` if pending |
+| `status` | string | Current status: `pending_payment`, `active`, `lapsed`, `grace`, `expired`, `check_failed` |
+| (other fields) | various | All other Subscriber_Record fields as defined in the schema |
 
-**Proxy URL:** https://solana-rpc-proxy.dharadarsh0.workers.dev
+## Pre-flight: Validate expected_amount_usdc
 
-For getSignaturesForAddress:
-- http_request tool with: GET https://solana-rpc-proxy.dharadarsh0.workers.dev/?method=getSignaturesForAddress&wallet=<SUBSCRIBER_WALLET>&limit=50
+Before making any RPC calls, validate the `expected_amount_usdc` field from the Subscriber_Record:
+- If `expected_amount_usdc` is absent, `null`, or not a valid positive number, this is a configuration error.
+- Log the error (e.g., write a memory entry: `"error:config:<discord_user_id>"` with the nature of the failure).
+- Set `status = "check_failed"`.
+- Do NOT update the subscriber's Discord role.
+- Return immediately:
+  ```json
+  {
+    "status": "check_failed",
+    "role_action": "no_change",
+    "expires_at": null,
+    "highest_amount_usdc_seen": null
+  }
+  ```
 
-For getTransaction:
-- http_request tool with: GET https://solana-rpc-proxy.dharadarsh0.workers.dev/?method=getTransaction&signature=<SIGNATURE>&encoding=jsonParsed
+## Step 1: Fetch Signatures for Reference Key
 
-**Error handling:** If the RPC call fails (proxy error, timeout, or invalid JSON response), set status = "check_failed" and do not proceed to role actions. Report the error in the output.
+Call:
+```
+GET https://solana-rpc-proxy.dharadarsh0.workers.dev/?method=getSignaturesForAddress&wallet={reference_key}&limit=100
+```
 
-3. Check if the transaction is a USDC transfer where:
-   - The source (from) is the subscriber wallet
-   - The destination (to) is EITHER the merchant wallet directly OR an associated token account owned by the merchant wallet
-   - The mint is USDC (4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU)
-   - The blockTime is within the last 30 days (30 * 24 * 60 * 60 = 2,592,000 seconds ago)
-   
-   To check ownership: In the parsed transaction, look at the transfer instruction's destination account. Then check the postTokenBalances or accountKeys to see if that destination account is owned by the merchant wallet.
+**On any proxy error** (non-2xx status, timeout, or unparseable JSON):
+- Save the current `status` value as `last_known_status` in the record.
+- Set `status = "check_failed"`.
+- Return immediately:
+  ```json
+  {
+    "status": "check_failed",
+    "role_action": "no_change",
+    "expires_at": null,
+    "highest_amount_usdc_seen": null
+  }
+  ```
+- Do NOT proceed to any further steps.
 
-4. If a matching transfer is found: status = "active", note the date from blockTime
-5. If none found: status = "lapsed"
-6. If RPC call fails or returns error: status = "check_failed"
+## Step 2: Fetch Individual Transactions
 
-7. Check the Discord user's current role status:
-   - Use the Discord user ID from the wallet mapping file for the current wallet
-   - Use http_request to GET https://discord.com/api/v10/guilds/1531347878906302484/members/{user_id}
-   - Set Authorization header: Bot YOUR_DISCORD_BOT_TOKEN
-   - Parse the JSON response to get the "roles" array
-   - Check if the string "1531669950819733575" appears in the roles array
-   - If "1531669950819733575" is in the roles array: current_role = "has_role"
-   - Otherwise: current_role = "no_role"
+For each signature in the list returned by Step 1, call:
+```
+GET https://solana-rpc-proxy.dharadarsh0.workers.dev/?method=getTransaction&signature={sig}&encoding=jsonParsed
+```
 
-**Handling Discord API errors:**
-If the Discord API call for a user's roles returns an error (404, 403, etc.), do NOT silently omit that wallet from your output. Report it as "check_failed" with the reason, same as an RPC failure. Never proceed as if the role check succeeded when it didn't.
+**On error for a specific signature** (non-2xx or unparseable response):
+- Mark that individual signature as `check_failed`.
+- Continue to the next signature.
+- Do NOT abort the entire check.
 
-8. Determine role action - FINAL ANSWER:
-   This is the most critical step. You MUST follow this logic exactly:
-   
-   IF status="lapsed" AND current_role="has_role": role_action="remove_role"
-   IF status="active" AND current_role="no_role": role_action="grant_role"
-   IF status="check_failed": role_action="no_change"
-   IF status="active" AND current_role="has_role": role_action="no_change"
-   IF status="lapsed" AND current_role="no_role": role_action="no_change"
-   
-   EXAMPLES:
-   - Wallet has no recent payment (lapsed) AND currently has the role (has_role) → remove_role
-   - Wallet has recent payment (active) AND currently lacks the role (no_role) → grant_role
-   - Wallet has recent payment (active) AND currently has the role (has_role) → no_change
-   - Wallet has no recent payment (lapsed) AND currently lacks the role (no_role) → no_change
-   
-   DO NOT use "no_change" when the correct answer is "remove_role". This is a critical error.
+## Step 3: Filter and Score Transactions
 
-9. Execute role actions via Discord API - MANDATORY EXECUTION:
-   - You MUST execute the role action determined in step 8
-   - If role_action is "grant_role":
-     * Use http_request to PUT to https://discord.com/api/v10/guilds/1531347878906302484/members/{user_id}/roles/1531669950819733575
-     * Set Authorization header: Bot YOUR_DISCORD_BOT_TOKEN
-     * Set Content-Type header: application/json
-   - If role_action is "remove_role":
-     * Post approval request using the proxy (http_request POST body bug workaround):
-       - Use http_request to GET https://solana-rpc-proxy.dharadarsh0.workers.dev/discord/message?channel_id=1531347878906302487&content=<URL-ENCODED_MESSAGE>
-       - Message content: "⚠️ Payment lapsed for @user. Propose removal of subscriber role. Admin approval required. React with ✅ to approve or ❌ to decline."
-     * DO NOT remove the role yet - this is the approval checkpoint. The role will be removed only after admin approval via the SOP's reaction handler.
-   - If role_action is "no_change": skip execution
-   - You MUST actually make these http_request calls, not just plan them
+For each successfully retrieved transaction, evaluate ALL of the following conditions. A transaction qualifies only if every condition holds:
 
-10. Respond ONLY in this exact format, nothing else:
-   {wallet}: {emoji ✅ or ❌ or ⚠️} {active/lapsed/check_failed} (last paid: {date or "none found" or "RPC error"}) | role_action: {grant_role/remove_role/no_change} | current_role: {has_role/no_role}
+### Condition A: Subscription Window
+Compute `subscribed_at_unix`:
+- If `subscribed_at` is not null: parse it as an ISO 8601 UTC string and obtain its Unix timestamp (integer seconds).
+- If `subscribed_at` is null: use `0` as `subscribed_at_unix` (any past blockTime is in-window).
 
-IMPORTANT: Before responding, you MUST verify your role_action logic:
-- If you determined status="lapsed" and current_role="has_role", then role_action MUST be "remove_role"
-- If you determined status="active" and current_role="no_role", then role_action MUST be "grant_role"
-- Double-check your logic matches the rules in step 7 before outputting the final response
+The transaction's `blockTime` must satisfy:
+```
+subscribed_at_unix ≤ blockTime ≤ subscribed_at_unix + period_days × 86400
+```
+Transactions outside this window are discarded.
 
-Do not include raw RPC JSON in your response — just the one-line summary per wallet.
+### Condition B: USDC SPL Token Transfer Instruction
+The transaction must contain a USDC SPL token transfer instruction. This means there must be an instruction in `transaction.message.instructions` or within `meta.innerInstructions[*].instructions` where:
+- `program` is `"spl-token"`
+- `parsed.type` is `"transfer"` or `"transferChecked"`
+
+### Condition C: Transfer Destination is Merchant Wallet
+The transfer destination (the `destination` or `account` field in `parsed.info`) must be either:
+- **Directly** the Merchant Wallet address `pt6Ws1FMbdrLbUZqKooediS8mu6SNvDJodzXUx6ypak`, OR
+- **An Associated Token Account (ATA) owned by the Merchant Wallet**: check `meta.postTokenBalances` for an entry whose `owner` field equals `pt6Ws1FMbdrLbUZqKooediS8mu6SNvDJodzXUx6ypak` and whose account index corresponds to the destination account.
+
+### Condition D: USDC Mint Matches
+The USDC mint must equal `4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU`. For `transferChecked` instructions, verify `parsed.info.mint`. For plain `transfer` instructions without a `mint` field in `parsed.info`, verify via `meta.postTokenBalances` (find the destination's token balance entry and check its `mint` field).
+
+### Condition E: Amount ≥ Required (integer arithmetic)
+Read the raw integer token units from `parsed.info.tokenAmount.amount` (for `transferChecked`) or `parsed.info.amount` (for `transfer`). Parse as an integer. This amount must satisfy:
+```
+raw_integer_amount ≥ expected_amount_usdc × 1,000,000
+```
+This comparison MUST be done with integer arithmetic only — no floating-point rounding. For example, for `expected_amount_usdc = 10.0`, the threshold is exactly `10000000` raw units.
+
+### Tracking Highest Amount Seen
+As you iterate over all instructions in all transactions, track the highest USDC transfer amount seen across ALL USDC transfers (qualifying or not) to the Merchant Wallet. Express this as:
+```
+highest_amount_usdc_seen = max_raw_units / 1,000,000
+```
+(a float with 6 decimal places, e.g. `9.500000`). If no USDC transfers are found at all, this value remains `null`.
+
+## Step 4: Qualifying Transactions Found
+
+If one or more transactions satisfy ALL conditions in Step 3:
+- Select the transaction with the **highest `blockTime`** (most recent).
+- Set:
+  - `status = "active"`
+  - `subscribed_at` = ISO 8601 UTC string derived from the winning `blockTime` (e.g., `"2026-07-29T12:00:00.000Z"`)
+  - `expires_at` = ISO 8601 UTC string derived from `blockTime + period_days × 86400` seconds
+
+Proceed to Step 7.
+
+## Step 5: No Qualifying Transactions — Insufficient Amount
+
+If NO qualifying transactions were found, but at least one USDC transfer to the Merchant Wallet was detected with an amount below the required threshold:
+- Set `status = "lapsed"`.
+- Post a notice to Subscribe_Channel via proxy:
+  ```
+  GET https://solana-rpc-proxy.dharadarsh0.workers.dev/discord/message?channel_id=1531347878906302487&content=<URL-encoded message>
+  ```
+  Message content (URL-encode before sending):
+  ```
+  ⚠️ @{discord_username} — payment detected but amount insufficient. Highest amount seen: {highest_amount_usdc_seen} USDC. Required: {expected_amount_usdc} USDC.
+  ```
+
+Proceed to Step 7.
+
+## Step 6: No USDC Transactions Found
+
+If NO USDC transfers were found at all (no transactions matched conditions B–D, regardless of amount):
+- Set `status = "lapsed"`.
+
+Proceed to Step 7.
+
+## Step 7: Check Current Discord Role
+
+Call:
+```
+GET https://solana-rpc-proxy.dharadarsh0.workers.dev/discord/guilds/1531347878906302484/members/{discord_user_id}
+```
+
+Check if the role `"1531669950819733575"` appears in the `roles` array of the response JSON.
+
+- If it does: `subscriber_has_role = true`
+- If it does not: `subscriber_has_role = false`
+- If the Discord API call fails (non-2xx response): treat as `check_failed` **for role purposes only** — set `role_check_failed = true`.
+
+## Step 8: Apply Role Logic
+
+Evaluate the following rules **in order**, applying the first matching rule:
+
+| Condition | `role_action` | Action |
+|---|---|---|
+| `status = "check_failed"` | `"no_change"` | No Discord role change. Post an error notice to Subscribe_Channel via proxy: `⚠️ Payment check failed for @{discord_username}. Failed at: {ISO 8601 UTC timestamp of failure}. Manual review required.` Then return. |
+| `role_check_failed = true` | `"no_change"` | Discord role check failed; no change. Return. |
+| `status = "active"` AND `subscriber_has_role = false` | `"grant_role"` | Execute PUT to grant Subscriber_Role via Discord API through proxy. Record grant timestamp in Subscriber_Record. |
+| `status = "active"` AND `subscriber_has_role = true` | `"no_change"` | Subscriber already has role; nothing to do. |
+| `status = "grace"` | `"no_change"` | Retain role during grace window. |
+| `status = "lapsed"` AND `subscriber_has_role = true` | `"propose_removal"` | Post removal proposal to Subscribe_Channel via proxy. |
+| `status = "lapsed"` AND `subscriber_has_role = false` | `"no_change"` | Subscriber does not have role; nothing to do. |
+| `status = "expired"` AND `subscriber_has_role = true` | `"propose_removal"` | Post removal proposal to Subscribe_Channel via proxy. |
+| `status = "expired"` AND `subscriber_has_role = false` | `"no_change"` | Nothing to do. |
+
+### Grant Role (when `role_action = "grant_role"`)
+Execute:
+```
+PUT https://discord.com/api/v10/guilds/1531347878906302484/members/{discord_user_id}/roles/1531669950819733575
+```
+via the proxy:
+```
+GET https://solana-rpc-proxy.dharadarsh0.workers.dev/discord/guilds/1531347878906302484/members/{discord_user_id}/roles/1531669950819733575
+```
+(Use the proxy's Discord role-grant passthrough with the appropriate method if available, or use the proxy's `/discord/message` workaround for PUT if needed per the runtime constraints.)
+
+After a successful grant, record the grant timestamp in the Subscriber_Record by setting a `role_granted_at` field to the current ISO 8601 UTC timestamp (e.g., `"2026-07-29T12:00:00.000Z"`). This persists into Memory_Store when the SOP updates the record after the skill returns.
+
+### Propose Removal (when `role_action = "propose_removal"`)
+Post to Subscribe_Channel via proxy:
+```
+GET https://solana-rpc-proxy.dharadarsh0.workers.dev/discord/message?channel_id=1531347878906302487&content=<URL-encoded message>
+```
+Message content (URL-encode before sending):
+```
+⚠️ Payment lapsed for @{discord_username}. Propose removal of subscriber role. Admin approval required. React with ✅ to approve or ❌ to decline.
+```
+Do NOT remove the role until admin approval is received.
+
+## Return Structure
+
+After completing all steps, return the following JSON object:
+
+```json
+{
+  "status": "<active|lapsed|check_failed>",
+  "role_action": "<grant_role|propose_removal|no_change>",
+  "expires_at": "<ISO 8601 UTC string or null>",
+  "highest_amount_usdc_seen": "<float with 6 decimal places or null>"
+}
+```
+
+### Return value semantics
+
+| Field | Description |
+|---|---|
+| `status` | Final effective status after payment evaluation. One of: `active`, `lapsed`, `check_failed`. |
+| `role_action` | Action taken (or proposed) for the Discord role. One of: `grant_role`, `propose_removal`, `no_change`. |
+| `expires_at` | ISO 8601 UTC string of subscription expiry (`blockTime + period_days × 86400`), or `null` if payment was not confirmed. |
+| `highest_amount_usdc_seen` | Highest USDC amount observed in any USDC transfer to the Merchant Wallet, expressed as a float with 6 decimal places (e.g. `9.500000`). `null` if no USDC transfers were found. |
+
+## Error Summary
+
+| Failure | Response |
+|---|---|
+| `expected_amount_usdc` absent, null, or non-numeric | Return `{status: "check_failed", role_action: "no_change", expires_at: null, highest_amount_usdc_seen: null}` immediately; log config error. |
+| `getSignaturesForAddress` proxy error (non-2xx, timeout, bad JSON) | Return `{status: "check_failed", role_action: "no_change", expires_at: null, highest_amount_usdc_seen: null}` immediately. |
+| `getTransaction` error for a specific signature | Mark that signature as failed; continue processing remaining signatures. |
+| Discord role check returns non-2xx | Set `role_check_failed = true`; apply `role_action = "no_change"`. |
+| Discord role grant returns non-2xx | Set `status = "check_failed"` for this cycle; retain existing role; post error notice to Subscribe_Channel. |
+| `status = "check_failed"` (any cause) | Post error notice to Subscribe_Channel including subscriber's Discord mention and failure timestamp. |
+| Insufficient-amount USDC transfer detected | Set `status = "lapsed"`; post insufficient-amount notice to Subscribe_Channel. |
