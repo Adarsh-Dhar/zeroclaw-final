@@ -1,0 +1,10 @@
+[sop]
+name = "subscription_check"
+description = "Check payment status for subscriber wallets against merchant wallet"
+version = "1.0.0"
+max_concurrent = 1
+admission_policy = "parallel"
+max_pending_approvals = 0
+
+[[triggers]]
+type = "manual"

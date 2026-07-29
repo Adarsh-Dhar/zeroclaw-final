@@ -1,0 +1,28 @@
+# Secrets
+.secret_key
+config.toml
+
+# Database files
+*.db
+*.db-shm
+*.db-wal
+
+# Runtime state and data
+data/
+state/
+daemon.sock
+
+# Logs
+*.log
+logs/
+cron.log
+
+# Cache
+.wrangler/cache/
+
+# Temporary files
+*.tmp
+pending_approvals.json
+
+# OS files
+.DS_Store

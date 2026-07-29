@@ -1,0 +1,134 @@
+schema_version = 3
+
+[risk_profiles]
+
+[risk_profiles.locked_down]
+allowed_commands = ["git", "npm", "cargo", "ls", "cat", "grep", "find", "echo", "pwd", "wc", "head", "tail", "date", "df", "du", "uname", "uptime", "hostname", "python", "python3", "pip", "node", "zeroclaw", "/path/to/your/check_payments_script.sh", "curl"]
+block_high_risk_commands = true
+forbidden_paths = ["/etc", "/root", "/home", "/usr", "/bin", "/sbin", "/lib", "/opt", "/boot", "/dev", "/proc", "/sys", "/var", "/tmp", "~/.ssh", "~/.gnupg", "~/.aws", "~/.config"]
+level = "full"
+require_approval_for_medium_risk = false
+sandbox_enabled = true
+workspace_only = true
+
+[runtime_profiles.unbounded]
+agentic = true
+agentic_timeout_secs = 1800
+compact_context = false
+delegation_timeout_secs = 900
+keep_tool_context_turns = 8
+max_actions_per_hour = 4294967295
+max_context_tokens = 128000
+max_cost_per_day_cents = 4294967295
+max_delegation_depth = 8
+max_history_messages = 200
+max_system_prompt_chars = 64000
+max_tool_iterations = 100
+max_tool_result_chars = 64000
+memory_recall_limit = 10
+parallel_tools = true
+shell_timeout_secs = 600
+strict_tool_parsing = false
+
+[risk_profiles.locked_down.delegation_policy]
+mode = "forbidden"
+
+[providers]
+
+[providers.models]
+
+[providers.models.gemini]
+
+[providers.models.gemini.test_gemini_model]
+model = "gemini-3.1-flash-lite"
+api_key = "YOUR_GEMINI_API_KEY"  # Replace with your actual API key
+
+[agents]
+
+[agents.test_agent]
+runtime_profile = "unbounded"
+risk_profile = "locked_down"
+model_provider = "gemini.test_gemini_model"
+channels = ["discord.test_discord"]
+skill_bundles = ["default"]
+
+[runtime_profiles]
+
+[runtime_profiles.unbounded.context_compression]
+enabled = true
+identifier_policy = "strict"
+max_passes = 3
+protect_first_n = 3
+protect_last_n = 4
+source_max_chars = 50000
+summary_max_chars = 4000
+threshold_ratio = 0.5
+timeout_secs = 60
+tool_result_retrim_chars = 2000
+
+[runtime_profiles.unbounded.eval]
+enabled = false
+max_retries = 1
+min_quality_score = 0.5
+
+[runtime_profiles.unbounded.history_pruning]
+collapse_tool_results = true
+enabled = false
+keep_recent = 4
+max_tokens = 8192
+
+[runtime_profiles.unbounded.thinking]
+default_level = "medium"
+native_thinking = false
+
+[runtime_profiles.unbounded.tool_receipts]
+enabled = false
+inject_system_prompt = true
+show_in_response = false
+
+[onboard_state]
+quickstart_completed = true
+
+[memory]
+backend = "sqlite.sqlite"
+
+[solana]
+rpc_url = "https://api.mainnet-beta.solana.com"  # Or your private RPC endpoint
+
+[custom]
+solana_rpc_proxy_url = "https://your-proxy.workers.dev"  # Cloudflare Worker proxy URL (see solana-rpc-proxy/ directory)
+
+# Note: this agent does not have file-read access. Payment checks are
+# triggered via ~/.zeroclaw/run_subscription_check.sh, which injects
+# wallet_mapping.json contents into the agent's prompt directly.
+# Do not rely on cron calling `zeroclaw agent` directly — it must go
+# through the wrapper script.
+
+[channels]
+
+[channels.discord]
+
+[channels.discord.test_discord]
+enabled = true
+bot_token = "YOUR_DISCORD_BOT_TOKEN"  # From Discord Developer Portal
+channel_id = "YOUR_DISCORD_CHANNEL_ID"  # Target channel for notifications
+server_id = "YOUR_DISCORD_SERVER_ID"  # Your Discord server ID
+subscriber_role_id = "YOUR_SUBSCRIBER_ROLE_ID"  # From Discord role settings
+
+[skill_bundles.default]
+directory = "shared/skills/default"
+
+[sop]
+sops_dir = "/path/to/your/agent/workspace/sops"  # Update with your actual path
+
+[scheduler]
+enabled = true
+
+[cron.subscription_check]
+job_type = "agent"
+agent = "test_agent"
+schedule = { kind = "cron", expr = "0 * * * *" }  # Every hour
+message = "Execute the subscription_check SOP to check payment status for all wallets"
+
+[gateway]
+paired_tokens = ["YOUR_PAIRED_TOKEN"]  # From zeroclaw gateway paircode
