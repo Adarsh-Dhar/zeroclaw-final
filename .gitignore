@@ -17,8 +17,8 @@ daemon.sock
 logs/
 cron.log
 
-# Cache
-.wrangler/cache/
+# Wrangler build artefacts and cache (contains account IDs, tokens, compiled output)
+.wrangler/
 
 # Temporary files
 *.tmp

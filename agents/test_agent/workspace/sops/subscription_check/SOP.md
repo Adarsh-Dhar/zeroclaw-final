@@ -22,16 +22,24 @@ usdc_mint = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
 discord_guild = "1531347878906302484"
 subscriber_role = "1531669950819733575"
 subscribe_channel = "1531347878906302487"
-wallet_mapping_path = "/Users/adarsh/Documents/zeroclaw/wallet_mapping.json"
+wallet_mapping_path = "~/.zeroclaw/wallet_mapping.json"
 ```
 
 ---
 
-## Step 1 — Load Subscriber Records
+## Step 1 — Load Subscriber Records via Index
 
-Use the `recall` memory tool to retrieve all entries whose key matches the prefix `"subscriber:"` from Memory_Store.
+The `subscriber_index` entry is the authoritative roster of all Discord user IDs that have ever started an onboarding flow. Loading via the index gives an exact enumeration rather than a relevance-ranked search that could silently drop subscribers as the memory corpus grows.
 
-**On failure** (Memory_Store unavailable or returns an error):
+### Step 1a — Recall the Index
+
+Use the `memory_recall` tool with query `"subscriber_index"`, `strategy="bm25"`, and `limit=1` to retrieve the index entry.
+
+- Parse the recalled content as a JSON array of Discord user ID strings.
+- If the key is not found, content is absent, or parsing fails: treat as `index = []` and proceed to Step 1b.
+- If the key is found and parses successfully: set `subscriber_ids = <parsed array>`. If the array is empty, proceed to Step 1b. Otherwise skip Step 1b and proceed to Step 1c.
+
+**On Memory_Store tool error** (the recall tool itself returns an error, not just an empty result):
 
 Post an operator alert to Subscribe_Channel:
 
@@ -41,15 +49,11 @@ GET {proxy_base_url}/discord/message?channel_id={subscribe_channel}&content=<URL
 
 Then terminate the cycle immediately. Do NOT process any subscribers or modify any Discord roles.
 
-**On success:** Set `subscriber_records` = the list of recalled entries (may be empty). Proceed to Step 2.
-
 ---
 
-## Step 2 — Check for Empty List / Trigger Migration
+### Step 1b — Empty Index: Attempt One-Time Migration
 
-If `subscriber_records` is empty, proceed with the following sub-step. If `subscriber_records` is non-empty, skip to Step 4.
-
-### Sub-step 2a — Attempt One-Time Migration
+If `subscriber_ids` is empty (index not found or empty array), proceed with the following sub-step. If `subscriber_ids` is non-empty, skip to Step 1c.
 
 Try to read `wallet_mapping.json` using the `read_file` tool at path `{wallet_mapping_path}`.
 
@@ -96,7 +100,26 @@ For each entry in the JSON object:
 
 4. Store the record in Memory_Store under key `"subscriber:<discord_user_id>"`.
 
-After all entries have been processed, set `subscriber_records` = the list of newly seeded records. Proceed to Step 4.
+After all entries have been processed, collect all successfully seeded `discord_user_id` values into a list and write the subscriber index:
+
+```
+store "subscriber_index" = JSON.stringify(["<id_1>", "<id_2>", ...])
+```
+
+Set `subscriber_ids` = the list of seeded IDs. Proceed to Step 1c.
+
+---
+
+### Step 1c — Load Individual Records
+
+For each `discord_user_id` in `subscriber_ids`:
+
+1. Use `memory_recall` with `query="subscriber:<discord_user_id>"`, `strategy="bm25"`, `limit=1`.
+2. Parse the recalled content as a JSON object (the Subscriber_Record).
+3. If the recall fails or content is missing/malformed: log a warning (write a memory entry under key `"error:load:<discord_user_id>"` with `{"event": "record_load_failed", "discord_user_id": "<id>", "timestamp": "<ISO 8601 UTC>"}`) and skip this subscriber for this cycle — do NOT add them to `subscriber_records`.
+4. If successful: add the parsed record to `subscriber_records`.
+
+After iterating all IDs: set `subscriber_records` = the list of successfully loaded records. If all loads failed (empty list), proceed to Step 3 which will post an empty summary. Proceed to Step 3.
 
 ---
 
@@ -344,9 +367,12 @@ On proxy failure posting the summary: log the failure. The summary is informatio
 
 | Failure | Detection | Response |
 |---|---|---|
-| Memory_Store unavailable at Step 1 | Recall tool returns error | Post operator alert, terminate cycle, no role changes |
-| `wallet_mapping.json` not readable in Step 2a | `read_file` returns error | Post no-subscribers notice, terminate cycle |
-| `/keygen` non-2xx in Step 2a migration | Non-2xx HTTP | Skip that entry, continue with remaining entries |
+| Memory_Store unavailable at Step 1a | Recall tool returns error | Post operator alert, terminate cycle, no role changes |
+| `subscriber_index` absent or malformed | Recall returns empty/bad content | Treat as empty index, proceed to Step 1b |
+| `wallet_mapping.json` not readable in Step 1b | `read_file` returns error | Post no-subscribers notice, terminate cycle |
+| `/keygen` non-2xx in Step 1b migration | Non-2xx HTTP | Skip that entry, continue with remaining entries |
+| Individual record load fails in Step 1c | Recall error or bad JSON | Log warning entry, skip subscriber this cycle |
+| `subscriber_index` write fails after migration (Step 1b) | Write tool error | Log error, subscriber records still valid |
 | `/keygen` non-2xx in Step 4a renewal | Non-2xx HTTP | Log error, skip DM, proceed to Step 4b unchanged |
 | check-payment SKILL returns `check_failed` | SKILL result status | Save `last_known_status`, no role change, post error notice |
 | Grace reminder proxy failure (Step 4c Case A) | Non-2xx HTTP | Retry once after 2s; log and continue if still failing |
@@ -361,7 +387,7 @@ On proxy failure posting the summary: log the failure. The summary is informatio
 
 The cycle terminates early (before processing any subscribers) only in these cases:
 
-1. Memory_Store is unavailable at Step 1 (operator alert posted).
-2. `subscriber_records` is empty AND `wallet_mapping.json` is not readable (no-subscribers notice posted).
+1. Memory_Store is unavailable at Step 1a (operator alert posted).
+2. `subscriber_ids` is empty AND `wallet_mapping.json` is not readable (no-subscribers notice posted).
 
-In all other cases — including individual subscriber failures — the cycle runs to completion and posts a summary.
+In all other cases — including individual subscriber record load failures and individual subscriber processing failures — the cycle runs to completion and posts a summary.

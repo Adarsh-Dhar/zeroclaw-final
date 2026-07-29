@@ -153,7 +153,9 @@ GET https://solana-rpc-proxy.dharadarsh0.workers.dev/keygen
 
 ---
 
-## Step 5: Persist Subscriber_Record
+## Step 5: Persist Subscriber_Record and Update Subscriber Index
+
+### Step 5a: Write the Subscriber_Record
 
 Write the following JSON object to Memory_Store under the key `"subscriber:<discord_user_id>"`:
 
@@ -185,8 +187,32 @@ Replace all `<placeholder>` values with the actual inputs and values from earlie
   ```
 - **STOP. Do not proceed to Discord message posting.**
 
-**If the write succeeds:**
+**If the write succeeds:** continue to Step 5b.
+
+---
+
+### Step 5b: Update the Subscriber Index
+
+The `subscriber_index` entry is the authoritative roster used by the subscription_check SOP to enumerate all subscribers without relying on relevance-ranked search. It must be kept in sync whenever a new subscriber is added.
+
+1. Recall the memory key `"subscriber_index"` from Memory_Store.
+
+2. Parse the recalled content as a JSON array of Discord user ID strings. If the key does not exist or the content is absent/malformed, start with an empty array `[]`.
+
+3. If `"<discord_user_id>"` is **not already present** in the array, append it.
+
+4. Write the updated array back to Memory_Store under key `"subscriber_index"`:
+   ```json
+   ["<id_1>", "<id_2>", ..., "<discord_user_id>"]
+   ```
+   Store the array as a JSON string (i.e., `JSON.stringify(updatedArray)`).
+
+**If the index write fails:**
+- Log the failure (write a memory entry under key `"error:index:<current_UTC_timestamp_ISO8601>:<discord_user_id>"` with `{"event": "subscriber_index_update_failed", "discord_user_id": "<discord_user_id>", "timestamp": "<ISO 8601 UTC>"}`).
+- The subscriber record written in Step 5a is still valid — **do not roll it back**. The index is a secondary structure; its inconsistency should be flagged for operator review, not used as a reason to abort onboarding.
 - Continue to Step 6.
+
+**If the index write succeeds:** continue to Step 6.
 
 ---
 
@@ -286,10 +312,10 @@ The skill halts immediately (without proceeding to the next step) whenever any o
 | Unrecognized tier | 2 |
 | Invalid `expected_amount_usdc` | 3 |
 | `/keygen` call fails | 4 |
-| Memory_Store write fails | 5 |
+| Memory_Store write fails (subscriber record) | 5a |
 | QR API call times out or returns non-2xx | 7 |
 
-Steps 6 and 8 do not have hard STOP conditions — Step 6 constructs the URL in-memory only, and Step 8 logs failures rather than halting (the record is already persisted).
+Steps 5b, 6, and 8 do not have hard STOP conditions — Step 5b logs index failures without halting, Step 6 constructs the URL in-memory only, and Step 8 logs failures rather than halting (the record is already persisted).
 
 ---
 

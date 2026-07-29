@@ -311,7 +311,7 @@ export default {
 
     // Forward request to Solana RPC (using devnet for testing)
     const rpcEndpoints = [
-      'https://devnet.helius-rpc.com/?api-key=REDACTED_API_KEY',
+      `https://devnet.helius-rpc.com/?api-key=${env.HELIUS_API_KEY}`,
       'https://api.devnet.solana.com'
     ];
     

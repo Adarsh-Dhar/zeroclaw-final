@@ -3,4 +3,10 @@ main = "worker.js"
 compatibility_date = "2024-01-01"
 
 [vars]
-# No environment variables needed for this simple proxy
+# No plain-text environment variables needed for this worker.
+# All secrets are injected via `wrangler secret put` and accessed through the `env` binding:
+#
+#   wrangler secret put HELIUS_API_KEY    ← revoke and replace the key that was previously hardcoded
+#   wrangler secret put DISCORD_BOT_TOKEN
+#
+# Never add secret values directly to this file.
