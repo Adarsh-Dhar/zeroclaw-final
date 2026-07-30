@@ -11,4 +11,4 @@ type = "manual"
 
 [[triggers]]
 type = "cron"
-schedule = "0 * * * *"
+expression = "0 * * * *"

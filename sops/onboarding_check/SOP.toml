@@ -8,4 +8,4 @@ max_pending_approvals = 0
 
 [[triggers]]
 type = "cron"
-schedule = "*/5 * * * *"
+expression = "*/5 * * * *"

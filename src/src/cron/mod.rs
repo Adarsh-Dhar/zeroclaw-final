@@ -42,51 +42,74 @@ fn parse_explicit_rfc3339_utc(raw: &str) -> Result<chrono::DateTime<chrono::Utc>
 pub fn handle_command(command: crate::CronCommands, config: &Config) -> Result<()> {
     match command {
         crate::CronCommands::List => {
-            let jobs = list_jobs(config)?;
-            if jobs.is_empty() {
+            let mut jobs = list_jobs(config)?;
+            
+            // Also include SOP cron triggers
+            let workspace_dir = &config.data_dir;
+            let default_mode = zeroclaw_runtime::sop::parse_execution_mode(&config.sop.default_execution_mode);
+            let sops = zeroclaw_runtime::sop::load_sops(workspace_dir, config.sop.sops_dir.as_deref(), default_mode);
+            
+            for sop in sops {
+                for trigger in &sop.triggers {
+                    if let zeroclaw_runtime::sop::SopTrigger::Cron { expression } = trigger {
+                        // Convert SOP cron trigger to display format
+                        println!(
+                            "- {} (SOP) | cron:{} | mode={} | steps={}",
+                            sop.name,
+                            expression,
+                            sop.execution_mode,
+                            sop.steps.len()
+                        );
+                    }
+                }
+            }
+            
+            if jobs.is_empty() && sops.iter().all(|s| !s.triggers.iter().any(|t| matches!(t, zeroclaw_runtime::sop::SopTrigger::Cron { .. }))) {
                 println!("{}", get_required_cli_string("cli-cron-none"));
                 println!("\n{}", get_required_cli_string("cli-cron-usage"));
                 println!("  zeroclaw cron add '0 9 * * *' 'agent -m \"Good morning!\"'"); // i18n-exempt: literal command example
                 return Ok(());
             }
 
-            println!(
-                "{}",
-                get_required_cli_string_with_args(
-                    "cli-cron-jobs-header",
-                    &[("count", &jobs.len().to_string())]
-                )
-            );
-            for job in jobs {
-                let last_run = job
-                    .last_run
-                    .map_or_else(|| "never".into(), |d| d.to_rfc3339());
-                let last_status = job.last_status.unwrap_or_else(|| "n/a".into());
+            if !jobs.is_empty() {
                 println!(
-                    "- {} | {:?} | next={} | last={} ({})",
-                    job.id,
-                    job.schedule,
-                    job.next_run.to_rfc3339(),
-                    last_run,
-                    last_status,
+                    "{}",
+                    get_required_cli_string_with_args(
+                        "cli-cron-jobs-header",
+                        &[("count", &jobs.len().to_string())]
+                    )
                 );
-                if !job.command.is_empty() {
+                for job in jobs {
+                    let last_run = job
+                        .last_run
+                        .map_or_else(|| "never".into(), |d| d.to_rfc3339());
+                    let last_status = job.last_status.unwrap_or_else(|| "n/a".into());
                     println!(
-                        "{}",
-                        get_required_cli_string_with_args(
-                            "cli-cron-list-cmd",
-                            &[("cmd", &job.command)]
-                        )
+                        "- {} | {:?} | next={} | last={} ({})",
+                        job.id,
+                        job.schedule,
+                        job.next_run.to_rfc3339(),
+                        last_run,
+                        last_status,
                     );
-                }
-                if let Some(prompt) = &job.prompt {
-                    println!(
-                        "{}",
-                        get_required_cli_string_with_args(
-                            "cli-cron-list-prompt",
-                            &[("prompt", prompt)]
-                        )
-                    );
+                    if !job.command.is_empty() {
+                        println!(
+                            "{}",
+                            get_required_cli_string_with_args(
+                                "cli-cron-list-cmd",
+                                &[("cmd", &job.command)]
+                            )
+                        );
+                    }
+                    if let Some(prompt) = &job.prompt {
+                        println!(
+                            "{}",
+                            get_required_cli_string_with_args(
+                                "cli-cron-list-prompt",
+                                &[("prompt", prompt)]
+                            )
+                        );
+                    }
                 }
             }
             Ok(())

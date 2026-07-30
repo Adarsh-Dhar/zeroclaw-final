@@ -27,7 +27,9 @@ wallet_mapping_path = "~/.zeroclaw/wallet_mapping.json"
 
 ---
 
-## Step 1 — Load Subscriber Records via Index
+## Steps
+
+### Step 1 — Load Subscriber Records via Index
 
 The `subscriber_index` entry is the authoritative roster of all Discord user IDs that have ever started an onboarding flow. Loading via the index gives an exact enumeration rather than a relevance-ranked search that could silently drop subscribers as the memory corpus grows.
 
@@ -123,7 +125,7 @@ After iterating all IDs: set `subscriber_records` = the list of successfully loa
 
 ---
 
-## Step 3 — Set Up Processing State
+### Step 3 — Set Up Processing State
 
 Set `current_time` = current UTC Unix timestamp in integer seconds (e.g., `1753920000`).
 
@@ -133,7 +135,7 @@ Set `summary_rows` = empty list.
 
 ---
 
-## Step 4 — Process Each Subscriber
+### Step 4 — Process Each Subscriber
 
 > **CRITICAL: Process each subscriber independently. A failure in any sub-step for one subscriber MUST NOT prevent processing of the remaining subscribers. Catch errors per subscriber and record `role_action = "check_failed"` for that subscriber in the summary.**
 
@@ -334,7 +336,7 @@ Add one row to `summary_rows`:
 
 ---
 
-## Step 5 — Post Consolidated Summary
+### Step 5 — Post Consolidated Summary
 
 After all subscribers have been processed, build the summary message:
 
