@@ -123,9 +123,9 @@ This feature replaces the static `wallet_mapping.json`-based subscriber onboardi
 
 #### Acceptance Criteria
 
-1. THE Subscription_Manager SHALL support at least two tiers: `standard` (10 USDC, 30 days) and `premium` (25 USDC, 30 days), with tier definitions readable from the Subscription_Manager's configuration context without requiring a restart or redeployment.
-2. WHEN a subscriber's tier is `standard`, THE Subscription_Manager SHALL use `expected_amount_usdc = 10.0` and `period_days = 30` (derived from the tier's configuration values) for all payment and expiry calculations.
-3. WHEN a subscriber's tier is `premium`, THE Subscription_Manager SHALL use `expected_amount_usdc = 25.0` and `period_days = 30` (derived from the tier's configuration values) for all payment and expiry calculations.
+1. THE Subscription_Manager SHALL support at least two tiers: `standard` (0.1 USDC, 30 days) and `premium` (0.25 USDC, 30 days), with tier definitions readable from the Subscription_Manager's configuration context without requiring a restart or redeployment.
+2. WHEN a subscriber's tier is `standard`, THE Subscription_Manager SHALL use `expected_amount_usdc = 0.1` and `period_days = 30` (derived from the tier's configuration values) for all payment and expiry calculations.
+3. WHEN a subscriber's tier is `premium`, THE Subscription_Manager SHALL use `expected_amount_usdc = 0.25` and `period_days = 30` (derived from the tier's configuration values) for all payment and expiry calculations.
 4. WHEN the onboarding flow runs for a new subscriber and no tier is specified in the subscribe command, THE Onboarding_Bot SHALL default to the `standard` tier and record `"standard"` as the `tier` field in the Subscriber_Record.
 5. WHEN a subscriber specifies a valid tier in the subscribe command (e.g., "subscribe premium"), THE Onboarding_Bot SHALL use that tier's `expected_amount_usdc` and `period_days` values from configuration when constructing the Solana_Pay_URL and Subscriber_Record.
 6. IF a subscriber specifies an unrecognized tier name in the subscribe command, THEN THE Onboarding_Bot SHALL post an error message to Subscribe_Channel listing the available tier names and SHALL NOT begin the onboarding flow.

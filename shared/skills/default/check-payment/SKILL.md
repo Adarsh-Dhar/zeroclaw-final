@@ -42,7 +42,7 @@ A `Subscriber_Record` object from SOP context with the following fields:
 | `discord_user_id` | string | Discord snowflake ID of the subscriber |
 | `discord_username` | string | Discord username |
 | `reference_key` | string | Base58-encoded 32-byte reference key for the current invoice |
-| `expected_amount_usdc` | number | Required USDC amount (e.g. `10.0` or `25.0`) |
+| `expected_amount_usdc` | number | Required USDC amount (e.g. `0.1` or `0.25`) |
 | `period_days` | integer | Subscription duration in days (e.g. `30`) |
 | `subscribed_at` | string \| null | ISO 8601 UTC timestamp of last confirmed payment, or `null` if pending |
 | `status` | string | Current status: `pending_payment`, `active`, `lapsed`, `grace`, `expired`, `check_failed` |
@@ -131,7 +131,7 @@ Read the raw integer token units from `parsed.info.tokenAmount.amount` (for `tra
 ```
 raw_integer_amount ≥ expected_amount_usdc × 1,000,000
 ```
-This comparison MUST be done with integer arithmetic only — no floating-point rounding. For example, for `expected_amount_usdc = 10.0`, the threshold is exactly `10000000` raw units.
+This comparison MUST be done with integer arithmetic only — no floating-point rounding. For example, for `expected_amount_usdc = 0.1`, the threshold is exactly `100000` raw units.
 
 ### Tracking Highest Amount Seen
 As you iterate over all instructions in all transactions, track the highest USDC transfer amount seen across ALL USDC transfers (qualifying or not) to the Merchant Wallet. Express this as:

@@ -190,7 +190,7 @@ A new skill that the OnboardSOP invokes when a subscribe command is detected.
 **Inputs (from SOP context):**
 - `discord_user_id`, `discord_username`
 - `tier` (parsed from message text, defaulting to `standard`)
-- Tier config: `{ standard: {amount: 10.0, period_days: 30}, premium: {amount: 25.0, period_days: 30} }`
+- Tier config: `{ standard: {amount: 0.1, period_days: 30}, premium: {amount: 0.25, period_days: 30} }`
 
 **Steps:**
 1. Recall `"subscriber:{discord_user_id}"` from Memory_Store.
@@ -307,7 +307,7 @@ Memory_Store value: JSON-serialized object with the following fields.
 | `discord_username` | string | yes | Discord username at time of onboarding |
 | `wallet_address` | string \| null | yes | Subscriber's Solana wallet (null until confirmed on-chain) |
 | `tier` | string | yes | `"standard"` or `"premium"` |
-| `expected_amount_usdc` | number | yes | Required USDC amount (float, e.g. `10.0`) |
+| `expected_amount_usdc` | number | yes | Required USDC amount (float, e.g. `0.1`) |
 | `period_days` | integer | yes | Subscription duration in days (e.g. `30`) |
 | `subscribed_at` | string \| null | yes | ISO 8601 UTC timestamp of confirmed payment block time, or null if pending |
 | `expires_at` | string \| null | yes | ISO 8601 UTC timestamp of expiry (`subscribed_at + period_days * 86400s`), or null if pending |
@@ -324,7 +324,7 @@ Memory_Store value: JSON-serialized object with the following fields.
   "discord_username": "adrs0890",
   "wallet_address": null,
   "tier": "premium",
-  "expected_amount_usdc": 25.0,
+  "expected_amount_usdc": 0.25,
   "period_days": 30,
   "subscribed_at": null,
   "expires_at": null,
@@ -340,11 +340,11 @@ Memory_Store value: JSON-serialized object with the following fields.
 
 ```toml
 [tiers.standard]
-amount_usdc = 10.0
+amount_usdc = 0.1
 period_days = 30
 
 [tiers.premium]
-amount_usdc = 25.0
+amount_usdc = 0.25
 period_days = 30
 
 [subscription]
@@ -361,7 +361,7 @@ solana:<Merchant_Wallet>?amount=<expected_amount_usdc>&spl-token=<USDC_Mint>&ref
 Where:
 - `Merchant_Wallet` = `pt6Ws1FMbdrLbUZqKooediS8mu6SNvDJodzXUx6ypak`
 - `USDC_Mint` = `4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU`
-- `expected_amount_usdc` is expressed as a decimal string (e.g. `10.0` or `25.0`)
+- `expected_amount_usdc` is expressed as a decimal string (e.g. `0.1` or `0.25`)
 - `reference_key` is the base58-encoded 32-byte array (44 chars)
 - `memo` = subscriber's Discord user ID (URL-encoded if needed)
 
@@ -400,7 +400,7 @@ The legacy file has two entries with fields `discord_user_id`, `discord_username
    - `discord_user_id`, `discord_username` from file.
    - `wallet_address` = the JSON key (wallet address from legacy file).
    - `tier` = `"standard"` (default; no tier info in legacy file).
-   - `expected_amount_usdc` = 10.0, `period_days` = 30.
+   - `expected_amount_usdc` = 0.1, `period_days` = 30.
    - `subscribed_at` = null, `expires_at` = null.
    - `grace_started_at` = value from file (null in both existing entries).
    - `reference_key` = new key generated via `/keygen` (each migrated subscriber gets a fresh pending invoice).

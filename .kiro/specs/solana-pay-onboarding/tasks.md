@@ -160,7 +160,7 @@ The dependency order enforced by hard constraints is:
     - Embed tier config and `grace_period_days=3`, `renewal_reminder_days=5` in a context block
     - Step 1: Recall all `"subscriber:*"` entries from Memory_Store; on failure post operator alert and terminate
     - Step 2: If empty, post "no subscribers registered" notice and terminate
-    - Step 3 (one-time migration): If no subscriber records found but `wallet_mapping.json` is readable, seed Subscriber_Records from legacy file (`wallet_address` = JSON key, `tier=standard`, `expected_amount_usdc=10.0`, `period_days=30`, `status=pending_payment`, fresh reference key per entry)
+    - Step 3 (one-time migration): If no subscriber records found but `wallet_mapping.json` is readable, seed Subscriber_Records from legacy file (`wallet_address` = JSON key, `tier=standard`, `expected_amount_usdc=0.1`, `period_days=30`, `status=pending_payment`, fresh reference key per entry)
     - Step 4 (per subscriber, independent — no stop-on-failure):
       - 4a: Renewal window check — if `status=active` and `expires_at - now ≤ renewal_reminder_days * 86400` and `renewal_dm_sent_for_expiry ≠ expires_at`: call `/keygen`, update record (`new reference_key`, `status=pending_payment`), set `renewal_dm_sent_for_expiry = expires_at`, send renewal DM via `/discord/dm`; retry DM up to 3 cycles on proxy failure
       - 4b: Invoke check-payment SKILL with the Subscriber_Record

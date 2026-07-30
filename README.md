@@ -172,11 +172,11 @@ zeroclaw cron list
 ### Subscription Tiers
 
 **Standard Tier:**
-- Amount: 10.0 USDC
+- Amount: 0.1 USDC
 - Period: 30 days
 
 **Premium Tier:**
-- Amount: 25.0 USDC
+- Amount: 0.25 USDC
 - Period: 30 days
 
 ### Role Management Logic

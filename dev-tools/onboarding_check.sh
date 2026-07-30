@@ -42,8 +42,8 @@ CONFIG_DIR = "/Users/adarsh/.zeroclaw"
 
 # Tier configurations
 TIERS = {
-    "standard": {"amount_usdc": 10.0, "period_days": 30},
-    "premium": {"amount_usdc": 25.0, "period_days": 30}
+    "standard": {"amount_usdc": 0.1, "period_days": 30},
+    "premium": {"amount_usdc": 0.25, "period_days": 30}
 }
 
 def load_processed_messages():

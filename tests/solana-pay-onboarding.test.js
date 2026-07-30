@@ -379,12 +379,12 @@ describe('Property 3: Solana Pay URL structural completeness', () => {
   });
 
   test('label is always "ZeroClaw+Subscription" in the raw URL', () => {
-    const url = buildSolanaPayURL('wallet123', 10.0, 'mint123', 'refkey123', 'user123');
+    const url = buildSolanaPayURL('wallet123', 0.1, 'mint123', 'refkey123', 'user123');
     expect(url).toContain('label=ZeroClaw+Subscription');
   });
 
   test('all five query parameters are present in the URL', () => {
-    const url = buildSolanaPayURL('wallet', 10.0, 'mint', 'ref', 'user');
+    const url = buildSolanaPayURL('wallet', 0.1, 'mint', 'ref', 'user');
     expect(url).toMatch(/[?&]amount=/);
     expect(url).toMatch(/[?&]spl-token=/);
     expect(url).toMatch(/[?&]reference=/);
@@ -419,7 +419,7 @@ describe('Property 5: Discord onboarding message contains all required fields', 
     discord_username: fc.string({ minLength: 1 }).filter(s => !s.includes('\n') && !s.includes('@')),
     wallet_address: fc.oneof(fc.string({ minLength: 1 }), fc.constant(null)),
     tier: fc.constantFrom('standard', 'premium'),
-    expected_amount_usdc: fc.oneof(fc.constant(10.0), fc.constant(25.0)),
+    expected_amount_usdc: fc.oneof(fc.constant(0.1), fc.constant(0.25)),
     period_days: fc.integer({ min: 1, max: 365 }),
     subscribed_at: fc.oneof(fc.constant(null), fc.constant('2026-01-01T00:00:00.000Z')),
     expires_at: fc.oneof(fc.constant(null), fc.constant('2026-01-31T00:00:00.000Z')),
@@ -428,7 +428,7 @@ describe('Property 5: Discord onboarding message contains all required fields', 
     status: fc.constantFrom('pending_payment', 'active', 'lapsed', 'grace', 'expired', 'check_failed'),
   });
 
-  const solanaPayURLArb = fc.string({ minLength: 10 }).map(s => `solana:wallet?amount=10.0&ref=${s}`);
+  const solanaPayURLArb = fc.string({ minLength: 10 }).map(s => `solana:wallet?amount=0.1&ref=${s}`);
   const qrURLArb = fc.string({ minLength: 10 }).map(s => `https://chart.googleapis.com/chart?chs=300x300&cht=qr&chl=${encodeURIComponent(s)}`);
 
   test('message contains Discord mention (@username)', () => {
@@ -831,7 +831,7 @@ describe('Property 8: Transaction payment validation correctness', () => {
 
   const recordArb = fc.record({
     discord_user_id: fc.constant('123'),
-    expected_amount_usdc: fc.oneof(fc.constant(10.0), fc.constant(25.0)),
+    expected_amount_usdc: fc.oneof(fc.constant(0.1), fc.constant(0.25)),
   });
 
   test('qualifying=true when all four conditions hold', () => {
@@ -923,7 +923,7 @@ describe('Property 8: Transaction payment validation correctness', () => {
   });
 
   test('qualifying=false for null/empty transaction', () => {
-    const record = { expected_amount_usdc: 10.0 };
+    const record = { expected_amount_usdc: 0.1 };
     expect(isQualifyingTransaction(null, record)).toBe(false);
     expect(isQualifyingTransaction({}, record)).toBe(false);
     expect(isQualifyingTransaction({ transaction: null, meta: null }, record)).toBe(false);
@@ -1286,7 +1286,7 @@ const subscriberRecordFullArb = fc.record({
   discord_username: fc.string({ minLength: 1, maxLength: 32 }).filter(s => /^\S+$/.test(s)),
   wallet_address: fc.oneof(fc.string({ minLength: 1, maxLength: 44 }), fc.constant(null)),
   tier: fc.constantFrom('standard', 'premium'),
-  expected_amount_usdc: fc.oneof(fc.constant(10.0), fc.constant(25.0)),
+  expected_amount_usdc: fc.oneof(fc.constant(0.1), fc.constant(0.25)),
   period_days: fc.integer({ min: 1, max: 365 }),
   subscribed_at: fc.oneof(isoDateArb, fc.constant(null)),
   expires_at: fc.oneof(isoDateArb, fc.constant(null)),
@@ -1334,7 +1334,7 @@ describe('Property 6: Subscriber_Record serialization round-trip', () => {
     // **Validates: Requirements 4.2**
     const record = {
       discord_user_id: '123', discord_username: 'user', wallet_address: null,
-      tier: 'standard', expected_amount_usdc: 10.0, period_days: 30,
+      tier: 'standard', expected_amount_usdc: 0.1, period_days: 30,
       subscribed_at: null, expires_at: null, grace_started_at: null,
       reference_key: '4vJ9JU1bfGg1xPcDxY2xFRG7JbN3TxWqZvKmPsHcL8E', status: 'pending_payment'
     };

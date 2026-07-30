@@ -111,7 +111,7 @@ def check_payment(record):
     if not signatures:
         return {'status': 'lapsed', 'expires_at': None, 'highest_amount': None}
 
-    expected_amount_usdc = record.get('expected_amount_usdc', 10.0)
+    expected_amount_usdc = record.get('expected_amount_usdc', 0.1)
     expected_amount_raw = int(expected_amount_usdc * 1_000_000)
     period_days = record.get('period_days', 30)
     subscribed_at = record.get('subscribed_at')
@@ -245,7 +245,7 @@ def main():
                             record['renewal_dm_sent_for_expiry'] = expires_at
 
                             # Build renewal Solana Pay URL
-                            amount = record.get('expected_amount_usdc', 10.0)
+                            amount = record.get('expected_amount_usdc', 0.1)
                             renewal_url = f"solana:{MERCHANT_WALLET}?amount={amount}&spl-token={USDC_MINT}&reference={new_ref_key}&label=ZeroClaw+Subscription&memo={user_id}"
 
                             # Send renewal DM

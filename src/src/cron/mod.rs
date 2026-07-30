@@ -49,7 +49,7 @@ pub fn handle_command(command: crate::CronCommands, config: &Config) -> Result<(
             let default_mode = zeroclaw_runtime::sop::parse_execution_mode(&config.sop.default_execution_mode);
             let sops = zeroclaw_runtime::sop::load_sops(workspace_dir, config.sop.sops_dir.as_deref(), default_mode);
             
-            for sop in sops {
+            for sop in &sops {
                 for trigger in &sop.triggers {
                     if let zeroclaw_runtime::sop::SopTrigger::Cron { expression } = trigger {
                         // Convert SOP cron trigger to display format
