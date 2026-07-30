@@ -50,93 +50,76 @@ bot_token = "YOUR_BOT_TOKEN"  # from Discord Developer Portal
 channel_id = "YOUR_CHANNEL_ID"  # target channel for notifications
 server_id = "YOUR_SERVER_ID"  # your Discord server ID
 subscriber_role_id = "YOUR_SUBSCRIBER_ROLE_ID"  # from Discord role settings
+
+[skill_bundles.default]
+directory = "/Users/adarsh/Documents/zeroclaw/shared/skills/default"
+
+[sop]
+sops_dir = "/Users/adarsh/.zeroclaw/agents/test_agent/workspace/sops"
+
+[workspace]
+path = "/Users/adarsh/Documents/zeroclaw"
+
+[scheduler]
+enabled = true
 ```
 
-2. **Create wallet mapping file `~/.zeroclaw/wallet_mapping.json`:**
+2. **Memory Store Configuration:**
 
-```json
-{
-  "WALLET_ADDRESS_1": {
-    "discord_user_id": "DISCORD_USER_ID_1",
-    "discord_username": "username1",
-    "status": "lapsed",
-    "grace_started_at": null
-  },
-  "WALLET_ADDRESS_2": {
-    "discord_user_id": "DISCORD_USER_ID_2", 
-    "discord_username": "username2",
-    "status": "active",
-    "grace_started_at": null
-  }
-}
-```
+The system uses ZeroClaw's built-in Memory_Store for persistent subscriber state. No manual configuration needed - it's configured as `backend = "sqlite.sqlite"` by default.
+
+3. **One-time Migration (Optional):**
+
+If you have existing subscribers in `wallet_mapping.json`, place it in your project directory. The `subscription_check` SOP will automatically migrate these to Memory_Store on first run. After successful migration, `wallet_mapping.json` can be safely deleted.
 
 ### 3. Skill Installation
 
-The payment checking skill is located at:
+The skills are located at:
 ```
-~/.zeroclaw/shared/skills/default/check-payment/SKILL.md
+/Users/adarsh/Documents/zeroclaw/shared/skills/default/check-payment/SKILL.md
+/Users/adarsh/Documents/zeroclaw/shared/skills/default/onboarding/SKILL.md
 ```
 
-This skill:
-- Queries Solana RPC for USDC transactions
-- Checks payment status within 30-day window
+**check-payment skill:**
+- Queries Solana RPC for USDC transactions using per-user reference keys
+- Checks payment status within subscription windows
+- Enforces tier-specific amount verification
 - Determines Discord role actions based on payment status
-- Returns formatted results for role management
+
+**onboarding skill:**
+- Handles Discord "subscribe" commands
+- Generates unique Solana Pay URLs with reference keys
+- Persists subscriber records in Memory_Store
+- Posts payment links and QR codes to Discord
 
 ### 4. SOP Configuration
 
-The subscription check SOP is located at:
+The SOPs are located at:
 ```
 ~/.zeroclaw/agents/test_agent/workspace/sops/subscription_check/
+~/.zeroclaw/agents/test_agent/workspace/sops/onboarding_check/
 ```
 
-Files:
-- `SOP.toml` - Trigger configuration (manual trigger, cron handled by scheduler)
-- `SOP.md` - Step-by-step process with approval checkpoint for role removal
+**subscription_check SOP:**
+- `SOP.toml` - Trigger configuration (cron: hourly)
+- `SOP.md` - Step-by-step process for payment checking, grace periods, and role management
+
+**onboarding_check SOP:**
+- `SOP.toml` - Trigger configuration (cron: every 5 minutes)
+- `SOP.md` - Step-by-step process for handling subscribe commands
 
 ### 5. Cloudflare Worker Proxy Deployment
 
 Deploy the Solana RPC proxy to work around the http_request POST body limitation:
 
 ```bash
-cd ~/.zeroclaw/solana-rpc-proxy
+cd /Users/adarsh/Documents/zeroclaw/solana-rpc-proxy
 npm install -g wrangler
 wrangler login
 wrangler deploy
 ```
 
-Copy the deployed URL (e.g., `https://solana-rpc-proxy.YOUR-ACCOUNT.workers.dev`) and update the skill at `~/.zeroclaw/shared/skills/default/check-payment/SKILL.md` with your actual proxy URL.
-
-### 6. Wrapper Script Setup
-
-Create `~/.zeroclaw/run_subscription_check.sh`:
-
-```bash
-#!/bin/bash
-# Read wallet mapping and inject into agent prompt
-ROSTER=$(cat ~/.zeroclaw/wallet_mapping.json)
-zeroclaw agent -a test_agent -m "Use the check-payment skill. Check payment status for every wallet in the following roster JSON. For each entry, use the exact wallet address and exact discord_user_id given. Roster: $ROSTER"
-```
-
-Make it executable:
-```bash
-chmod +x ~/.zeroclaw/run_subscription_check.sh
-```
-
-### 7. Cron Job Setup
-
-Add to your system crontab (not ZeroClaw's internal scheduler):
-
-```bash
-# Edit crontab
-crontab -e
-
-# Add this line (runs every hour)
-0 * * * * /Users/adarsh/.zeroclaw/run_subscription_check.sh >> ~/.zeroclaw/logs/subscription_check.log 2>&1
-```
-
-**Note:** Do not rely on ZeroClaw's internal cron scheduler calling `zeroclaw agent` directly — it must go through the wrapper script to inject the roster.
+Copy the deployed URL (e.g., `https://solana-rpc-proxy.YOUR-ACCOUNT.workers.dev`) and update the skills with your actual proxy URL.
 
 ### 6. Running the System
 
@@ -145,36 +128,56 @@ crontab -e
 zeroclaw daemon
 ```
 
-2. **Test manual execution:**
+2. **Verify SOP discovery:**
 ```bash
-# Test the skill directly
-zeroclaw agent -m "Use the check-payment skill to check if wallet WALLET_ADDRESS has made a USDC payment to merchant MERCHANT_WALLET in the last 30 days"
-
-# Test the SOP
-zeroclaw sop run subscription_check
+zeroclaw sop list
 ```
 
-3. **Verify cron scheduling:**
+3. **Verify skill bundles loaded:**
+```bash
+zeroclaw skills list --agent test_agent
+```
+
+4. **Test manual execution:**
+```bash
+# Test the SOP manually
+zeroclaw sop run subscription_check
+zeroclaw sop run onboarding_check
+```
+
+5. **Verify SOP scheduling:**
 ```bash
 zeroclaw cron list
 ```
 
 ## Architecture
 
-1. **Cron (OS-level):** Triggers a wrapper script every N minutes via crontab
-2. **Wrapper Script:** `run_subscription_check.sh` reads `wallet_mapping.json` at the shell level and injects its contents directly into the agent's prompt
-3. **ZeroClaw Agent:** Using the `check-payment` skill, calls the built-in `http_request` tool to:
-   - Query Solana RPC via a self-hosted Cloudflare Worker proxy
-   - Query Discord's REST API for role status
-4. **Role Management:** Based on payment status, the agent grants roles automatically (active) or removes directly (lapsed)
+1. **ZeroClaw Daemon:** Runs persistently with internal scheduler that triggers SOPs based on cron expressions in SOP.toml files
+2. **SOP Engine:** Executes standardized operating procedures with deterministic run, admission policy, and audit log
+3. **Memory_Store:** Persistent subscriber state storage using SQLite backend, with `subscriber:<discord_user_id>` key scheme
+4. **Skills:**
+   - `check-payment`: Queries Solana RPC via Cloudflare Worker proxy for payment verification using per-user reference keys
+   - `onboarding`: Handles Discord subscribe commands and generates Solana Pay URLs
+5. **Role Management:** Based on payment status, the agent grants roles automatically (active) or proposes removal after grace period (lapsed)
 
 ### Payment Verification Process
 
-1. **On-Chain Query:** The system queries Solana RPC for USDC transactions from subscriber wallets to the merchant wallet
-2. **Time Window:** Checks for payments within the last 30 days (2,592,000 seconds)
-3. **Status Determination:** 
-   - `active`: Valid USDC payment found within time window
-   - `lapsed`: No valid payment found within time window
+1. **Onboarding:** User types "subscribe" or "subscribe premium" in Discord channel
+2. **Reference Key Generation:** System generates unique reference key via `/keygen` endpoint
+3. **Solana Pay URL:** Creates payment URL with tier-specific amount and reference key
+4. **Payment Verification:** System queries Solana RPC for transactions to reference key
+5. **Amount Validation:** Verifies payment amount meets tier requirements
+6. **Subscription Window:** Checks payment within configured period (default 30 days)
+
+### Subscription Tiers
+
+**Standard Tier:**
+- Amount: 10.0 USDC
+- Period: 30 days
+
+**Premium Tier:**
+- Amount: 25.0 USDC
+- Period: 30 days
 
 ### Role Management Logic
 
@@ -182,12 +185,15 @@ zeroclaw cron list
 - If payment status is `active` AND user lacks subscriber role
 - System automatically grants subscriber role via Discord API
 
+**Grace Period:**
+- If payment status is `lapsed`, system starts 3-day grace period
+- User retains role during grace period
+- Renewal reminder sent 5 days before expiry
+
 **Role Removal (Approval-Gated):**
-- If payment status is `lapsed` AND user has subscriber role
-- System posts approval request to Discord channel via proxy
-- Waits for admin approval (✅ reaction)
-- If approved: Removes subscriber role
-- If declined: Maintains current status
+- If grace period expires AND user has subscriber role
+- System posts role removal proposal to Discord channel
+- Requires admin approval to remove role
 
 **No Change:**
 - If payment status matches current role status
@@ -207,48 +213,50 @@ zeroclaw cron list
 ### HTTP Request POST Body Bug
 ZeroClaw's built-in `http_request` tool does not transmit a POST request body (confirmed via httpbin.org testing — body arrives empty server-side regardless of argument name used). This breaks direct calls to Solana's JSON-RPC endpoint, which requires POST.
 
-**Workaround:** Solana RPC calls are routed through a self-hosted Cloudflare Worker proxy (`solana-rpc-p.oExtended tyeaproxy pattern to handae Dircordsmessage post0ng: .weoWorker now accepts GET requests to `/dkscord/message` aed interns.ly performs authentdcateevPO)T toaDiscccd'e APIp The bottt kEn isTsto rd as etW rkernsinret, noe passrd in URLn.aThls preseyv s eheohuman-mn-s e-lotp checkreintPOST to Solana RPC endpoints. The proxy is stateless, holds no keys, and only relays read-only RPC calls.
+**Workaround:** Solana RPC calls are routed through a self-hosted Cloudflare Worker proxy. The proxy accepts GET requests and internally performs authenticated POST requests to Solana RPC endpoints. The proxy is stateless, holds no keys, and only relays read-only RPC calls.
 
-**Impact on approval-gated removal:** The approval checkpoint requires POSTing a message body to Discord, which fails with "invalid JSON" errors. Role removal now executes directly without approval.
-
-### File/Shell Tools Not Available
-Under this agent's `locked_down` risk profile, only the `http_request` tool is granted — bash and file-read tools are not available. This means the agent cannot read `wallet_mapping.json` directly.
-
-**Workaround:** The wrapper script reads the file at the shell level and passes its contents directly in the prompt on every run, so the roster stays the single source of truth an operator edits — no code changes needed, the agent never needs file access itself.
-
-**Prompt Injection Resistance:**
-- This MVP's SOP is cron-triggered only; there is no inbound message-handling surface
-- Therefore, there is no prompt-injection attack surface to test in this version
+### Prompt Injection Resistance
 - Bot only trusts on-chain data for payment verification
 - No user claims or fabricated transaction signatures are accepted
-
-**Approval Checkpoint:**
-- Role removal requires admin approval
-- Automatic role grants allowed for verified payments (read-only operation)
-- Fail-safe: system defaults to maintaining access status
+- Memory_Store provides persistent state without external file access
 
 ## File Structure
 
 ```
 ~/.zeroclaw/
 ├── config.toml                          # Main ZeroClaw configuration
-├── config.example.toml                  # Example configuration with documentation
-├── wallet_mapping.json                  # Wallet to Discord user mapping
-├── run_subscription_check.sh            # Wrapper script for cron (reads roster, injects into prompt)
+├── agents/test_agent/workspace/sops/
+│   ├── subscription_check/
+│   │   ├── SOP.toml                     # SOP trigger configuration (cron: hourly)
+│   │   └── SOP.md                       # Payment checking and role management steps
+│   └── onboarding_check/
+│       ├── SOP.toml                     # SOP trigger configuration (cron: every 5 min)
+│       └── SOP.md                       # Subscribe command handling steps
+├── shared/skills/default/
+│   ├── check-payment/
+│   │   └── SKILL.md                     # Payment verification skill
+│   └── onboarding/
+│       └── SKILL.md                     # Onboarding skill
 ├── solana-rpc-proxy/
 │   ├── worker.js                        # Cloudflare Worker proxy code
 │   ├── wrangler.toml                    # Worker deployment config
 │   └── DEPLOYMENT_GUIDE.md              # Proxy deployment instructions
-├── shared/skills/default/
-│   └── check-payment/
-│       └── SKILL.md                     # Payment checking skill (uses proxy URL)
-└── agents/test_agent/workspace/sops/
-    └── subscription_check/
-        ├── SOP.toml                     # SOP trigger configuration
-        └── SOP.md                       # SOP steps
+└── dev-tools/                           # Local test harness (not for production)
+    ├── onboarding_check.sh              # Shadow implementation (moved here)
+    └── subscription_check.sh            # Shadow implementation (moved here)
 ```
 
 ## Troubleshooting
+
+### SOPs Not Discovered
+- Verify `sops_dir` path in config.toml is correct
+- Check that SOP.toml and SOP.md files exist in the directory
+- Restart daemon after config changes: `pkill -f "zeroclaw daemon" && zeroclaw daemon`
+
+### Skills Not Loading
+- Verify `skill_bundles.default.directory` path in config.toml is correct
+- Check that SKILL.md files exist in the skills directory
+- Run `zeroclaw skills list --agent test_agent` to verify
 
 ### Bot Cannot Manage Roles
 - Verify bot has "Manage Roles" permission
@@ -259,21 +267,18 @@ Under this agent's `locked_down` risk profile, only the `http_request` tool is g
 - Verify RPC URL is accessible
 - Check rate limits on public RPC endpoints
 - Consider using private RPC for production
+- Verify Cloudflare Worker proxy is deployed and accessible
 
-### Cron Job Not Executing
+### SOP Not Executing on Schedule
 - Verify scheduler is enabled in config.toml
-- Check cron syntax is correct
+- Check cron syntax in SOP.toml files
 - Ensure daemon is running: `zeroclaw daemon`
-
-### Approval System Not Working
-- Verify pending_approvals.json file exists and is writable
-- Check Discord bot permissions for message reactions
-- Ensure approval handler function is properly configured
+- Check `zeroclaw cron list` for scheduled jobs
 
 ## Security Considerations
 
 **Data Privacy:**
-- Wallet addresses are stored in local mapping file
+- Subscriber records stored in ZeroClaw Memory_Store (SQLite backend)
 - Discord user IDs are used for role management only
 - No sensitive payment data is stored permanently
 
@@ -281,20 +286,17 @@ Under this agent's `locked_down` risk profile, only the `http_request` tool is g
 - Bot token should be kept secret
 - Config file contains sensitive tokens - use environment variables in production
 - Role hierarchy prevents privilege escalation
+- Memory_Store operations require `memory_store` tool permission
 
 **Audit Trail:**
 - All role changes are posted to Discord channel
 - Payment checks are logged by ZeroClaw
-- Approval decisions are recorded in pending_approvals.json
+- SOP runs are tracked in daemon state
 
-## Future Enhancements
-
-- Grace period implementation before role removal
-- Multi-merchant support
-- Payment amount verification
-- Subscription tier management
-- Webhook notifications for payment events
-- Historical payment tracking
+**Unattended Memory Operations:**
+- `require_approval_for_medium_risk = false` in config allows memory_store to execute without operator approval
+- This is necessary for cron-triggered SOP runs
+- Memory_Store is a medium-risk write operation
 
 ## License
 
@@ -306,4 +308,3 @@ For issues related to:
 - **ZeroClaw:** https://github.com/zeroclaw-labs/zeroclaw
 - **Solana RPC:** https://docs.solana.com/
 - **Discord API:** https://discord.com/developers/docs/intro
-# zeroclaw-final

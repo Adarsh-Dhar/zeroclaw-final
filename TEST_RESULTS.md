@@ -1,8 +1,14 @@
 # Test Results - Solana Payment System MVP
 
-**Date:** 2026-07-29  
-**Environment:** Solana Devnet  
-**RPC URL:** https://api.devnet.solana.com  
+**⚠️ SUPESEDED IMPLEMENTATION - July 30, 2026**
+
+This document describes a superseded implementation using wrapper scripts (`check_payments_discord.sh`, `run_subscription_check.sh`) and `wallet_mapping.json`. The current implementation uses ZeroClaw's SOP-driven architecture with Memory_Store for persistence. See README.md for the current architecture.
+
+---
+
+**Date:** 2026-07-29
+**Environment:** Solana Devnet
+**RPC URL:** https://api.devnet.solana.com
 **Proxy URL:** https://solana-rpc-proxy.dharadarsh0.workers.dev
 
 ---

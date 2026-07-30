@@ -1,7 +1,13 @@
 # MVP Completion Status — ZeroClaw Subscription Gatekeeper
 
-**Bounty:** ZeroClaw Subscription Gatekeeper  
-**Date:** July 28, 2026  
+**⚠️ SUPESEDED IMPLEMENTATION - July 30, 2026**
+
+This document describes a superseded implementation using wrapper scripts (`check_payments_discord.sh`, `run_subscription_check.sh`) and `wallet_mapping.json`. The current implementation uses ZeroClaw's SOP-driven architecture with Memory_Store for persistence. See README.md for the current architecture.
+
+---
+
+**Bounty:** ZeroClaw Subscription Gatekeeper
+**Date:** July 28, 2026
 **Status:** 6/7 Steps Complete (Video Recording Remaining)
 
 ---
