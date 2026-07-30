@@ -1,6 +1,6 @@
 [sop]
-name = "onboarding_check"
-description = "Poll Signup_Channel every 5 minutes for register commands and invoke the Onboarding SKILL for each qualifying message"
+name = "subscription_commands"
+description = "Poll Subscription_Channel every 5 minutes for subscribe commands from registered users and invoke the Onboarding SKILL for each qualifying message"
 version = "1.0.0"
 max_concurrent = 1
 admission_policy = "parallel"

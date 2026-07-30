@@ -2,6 +2,8 @@
 // This worker accepts GET requests and forwards them as POST to Solana RPC and Discord API
 // Deploy to Cloudflare Workers to get a public endpoint
 
+import nacl from 'tweetnacl';
+
 // Base58 encoding using the Bitcoin alphabet
 // Encodes a Uint8Array to a base58 string using big-integer division
 const BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
@@ -53,6 +55,95 @@ function encodeBase58(bytes) {
   return leading + digits.reverse().join('');
 }
 
+function decodeBase58(str) {
+  const bytes = [0];
+  for (const char of str) {
+    const value = BASE58_ALPHABET.indexOf(char);
+    if (value === -1) throw new Error('Invalid base58 character');
+    let carry = value;
+    for (let i = 0; i < bytes.length; i++) {
+      carry += bytes[i] * 58;
+      bytes[i] = carry & 0xff;
+      carry >>= 8;
+    }
+    while (carry > 0) {
+      bytes.push(carry & 0xff);
+      carry >>= 8;
+    }
+  }
+  for (const char of str) {
+    if (char !== '1') break;
+    bytes.push(0);
+  }
+  return new Uint8Array(bytes.reverse());
+}
+
+// In-memory nonce store per Worker instance is not durable across requests
+// in Cloudflare Workers — nonces must be signed+verified statelessly instead.
+// We embed discord_id + issued_at + a short random token in the nonce itself,
+// then just check issued_at is recent (replay window) rather than needing storage.
+function buildNonce(discordId) {
+  const token = crypto.randomUUID();
+  const issuedAt = Date.now();
+  return `ZeroClaw-Registration|discord:${discordId}|issued:${issuedAt}|nonce:${token}`;
+}
+
+function nonceIsFresh(nonce, maxAgeMs = 5 * 60 * 1000) {
+  const match = nonce.match(/\|issued:(\d+)\|/);
+  if (!match) return false;
+  const issuedAt = Number(match[1]);
+  return Date.now() - issuedAt <= maxAgeMs;
+}
+
+function buildRegisterPage(discordId, discordUsername, nonce, proxyBaseUrl) {
+  return `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>ZeroClaw — Verify Wallet</title>
+<style>body{font-family:system-ui;max-width:480px;margin:60px auto;padding:0 20px;text-align:center}
+button{padding:12px 24px;font-size:16px;border-radius:8px;border:none;background:#512da8;color:#fff;cursor:pointer;margin-top:20px}
+#status{margin-top:20px;color:#555}</style></head>
+<body>
+<h2>Verify your wallet</h2>
+<p>Registering for Discord user <b>${discordUsername || discordId}</b></p>
+<p>This proves you control the wallet — it does not send any transaction or reveal your private key.</p>
+<button id="connect">Connect &amp; Sign</button>
+<div id="status"></div>
+<script>
+const nonce = ${JSON.stringify(nonce)};
+const discordId = ${JSON.stringify(discordId)};
+document.getElementById('connect').onclick = async () => {
+  const statusEl = document.getElementById('status');
+  try {
+    if (!window.solana || !window.solana.isPhantom) {
+      statusEl.textContent = 'Phantom wallet not found. Install it and reload this page.';
+      return;
+    }
+    statusEl.textContent = 'Connecting...';
+    const resp = await window.solana.connect();
+    const wallet = resp.publicKey.toString();
+    statusEl.textContent = 'Please sign the message in your wallet...';
+    const encodedMessage = new TextEncoder().encode(nonce);
+    const signed = await window.solana.signMessage(encodedMessage, 'utf8');
+    const signatureB64 = btoa(String.fromCharCode(...signed.signature));
+    statusEl.textContent = 'Verifying...';
+    const verifyResp = await fetch(${JSON.stringify(proxyBaseUrl)} + '/verify-registration', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ discord_id: discordId, wallet, signature: signatureB64, nonce })
+    });
+    const result = await verifyResp.json();
+    if (result.ok) {
+      statusEl.textContent = '✅ Verified! Return to Discord — #subscription is now unlocked.';
+    } else {
+      statusEl.textContent = '❌ Verification failed: ' + (result.error || 'unknown error');
+    }
+  } catch (e) {
+    statusEl.textContent = 'Error: ' + e.message;
+  }
+};
+</script>
+</body></html>`;
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -66,6 +157,95 @@ export default {
         status: 200,
         headers: { 'Content-Type': 'application/json' }
       });
+    }
+
+    // GET /register?discord_id=...&discord_username=...
+    // Serves the wallet-connect-and-sign HTML page
+    if (url.pathname === '/register' && request.method === 'GET') {
+      const discordId = url.searchParams.get('discord_id');
+      const discordUsername = url.searchParams.get('discord_username') || '';
+      if (!discordId) {
+        return new Response('Missing discord_id parameter', { status: 400 });
+      }
+      const nonce = buildNonce(discordId);
+      const html = buildRegisterPage(discordId, discordUsername, nonce, env.PROXY_BASE_URL);
+      return new Response(html, { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+    }
+
+    // POST /verify-registration
+    // Body: { discord_id, wallet, signature, nonce }
+    if (url.pathname === '/verify-registration' && request.method === 'POST') {
+      let body;
+      try {
+        body = await request.json();
+      } catch {
+        return new Response(JSON.stringify({ error: 'invalid_json' }), { status: 400 });
+      }
+
+      const { discord_id, wallet, signature, nonce } = body;
+      if (!discord_id || !wallet || !signature || !nonce) {
+        return new Response(JSON.stringify({ error: 'missing_fields' }), { status: 400 });
+      }
+
+      // Nonce must reference this exact discord_id (prevents replaying someone
+      // else's page load against a different wallet) and be recent.
+      if (!nonce.includes(`discord:${discord_id}|`)) {
+        return new Response(JSON.stringify({ error: 'nonce_discord_mismatch' }), { status: 400 });
+      }
+      if (!nonceIsFresh(nonce)) {
+        return new Response(JSON.stringify({ error: 'nonce_expired' }), { status: 400 });
+      }
+
+      // Verify the ed25519 signature over the nonce message
+      let verified = false;
+      try {
+        const pubkeyBytes = decodeBase58(wallet);
+        const sigBytes = Uint8Array.from(atob(signature), c => c.charCodeAt(0));
+        const messageBytes = new TextEncoder().encode(nonce);
+        verified = nacl.sign.detached.verify(messageBytes, sigBytes, pubkeyBytes);
+      } catch (e) {
+        return new Response(JSON.stringify({ error: 'verification_error', detail: String(e) }), { status: 400 });
+      }
+
+      if (!verified) {
+        return new Response(JSON.stringify({ error: 'signature_invalid' }), { status: 401 });
+      }
+
+      // Signature is valid — this Discord user genuinely controls this wallet.
+      // Grant the Registered role directly (this is the one place a role grant
+      // happens without going through the SOP, since it's a direct consequence
+      // of a verified cryptographic proof, not a chat claim).
+      const roleResp = await fetch(
+        `https://discord.com/api/v10/guilds/${env.DISCORD_GUILD_ID}/members/${discord_id}/roles/${env.REGISTERED_ROLE_ID}`,
+        { method: 'PUT', headers: { Authorization: `Bot ${env.DISCORD_BOT_TOKEN}` } }
+      );
+      if (!roleResp.ok) {
+        return new Response(JSON.stringify({ error: 'role_grant_failed', status: roleResp.status }), { status: 502 });
+      }
+
+      // Notify #signup and post the verified mapping into #subscription so the
+      // onboarding_check SOP can pick it up and persist it into Memory_Store —
+      // the Worker itself never touches Memory_Store directly.
+      await fetch(
+        `https://discord.com/api/v10/channels/${env.SIGNUP_CHANNEL_ID}/messages`,
+        {
+          method: 'POST',
+          headers: { Authorization: `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content: `✅ <@${discord_id}> wallet verified. Head to <#${env.SUBSCRIPTION_CHANNEL_ID}> to subscribe.` }),
+        }
+      );
+      await fetch(
+        `https://discord.com/api/v10/channels/${env.SUBSCRIPTION_CHANNEL_ID}/messages`,
+        {
+          method: 'POST',
+          headers: { Authorization: `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            content: `WALLET_VERIFIED discord_user_id=${discord_id} wallet_address=${wallet} verified_at=${new Date().toISOString()}`,
+          }),
+        }
+      );
+
+      return new Response(JSON.stringify({ ok: true, wallet }), { headers: { 'Content-Type': 'application/json' } });
     }
 
     // Handle Discord DM sending

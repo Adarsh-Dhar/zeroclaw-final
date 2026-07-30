@@ -1,0 +1,13 @@
+{
+  "name": "solana-rpc-proxy",
+  "version": "1.0.0",
+  "description": "Cloudflare Worker for Solana RPC Proxy and Discord Message Proxy",
+  "main": "worker.js",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev"
+  },
+  "dependencies": {
+    "tweetnacl": "^1.0.3"
+  }
+}

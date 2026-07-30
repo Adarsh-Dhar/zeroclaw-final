@@ -21,7 +21,7 @@ merchant_wallet = "pt6Ws1FMbdrLbUZqKooediS8mu6SNvDJodzXUx6ypak"
 usdc_mint = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
 discord_guild = "1531347878906302484"
 subscriber_role = "1531669950819733575"
-subscribe_channel = "1531347878906302487"
+subscription_channel = "1532423195884261377"
 wallet_mapping_path = "~/.zeroclaw/wallet_mapping.json"
 ```
 
@@ -41,9 +41,9 @@ wallet_mapping_path = "~/.zeroclaw/wallet_mapping.json"
    - If the key is found and parses successfully: set `subscriber_ids = <parsed array>`. If the array is empty, proceed to migration. Otherwise skip migration and proceed to loading individual records.
 
    **On Memory_Store tool error** (the recall tool itself returns an error, not just an empty result):
-   Post an operator alert to Subscribe_Channel:
+   Post an operator alert to Subscription_Channel:
    ```
-   GET {proxy_base_url}/discord/message?channel_id={subscribe_channel}&content=<URL-encoded: "⚠️ OPERATOR ALERT: Memory_Store unavailable at subscription check cycle start. No role changes made.">
+   GET {proxy_base_url}/discord/message?channel_id={subscription_channel}&content=<URL-encoded: "⚠️ OPERATOR ALERT: Memory_Store unavailable at subscription check cycle start. No role changes made.">
    ```
    Then terminate the cycle immediately. Do NOT process any subscribers or modify any Discord roles.
 
@@ -51,9 +51,9 @@ wallet_mapping_path = "~/.zeroclaw/wallet_mapping.json"
    If `subscriber_ids` is empty (index not found or empty array), try to read `wallet_mapping.json` using the `read_file` tool at path `{wallet_mapping_path}`.
 
    If the file is not readable (does not exist, permission error, or any read error):
-   Post a notice to Subscribe_Channel:
+   Post a notice to Subscription_Channel:
    ```
-   GET {proxy_base_url}/discord/message?channel_id={subscribe_channel}&content=<URL-encoded: "ℹ️ No subscribers registered in Memory_Store.">
+   GET {proxy_base_url}/discord/message?channel_id={subscription_channel}&content=<URL-encoded: "ℹ️ No subscribers registered in Memory_Store.">
    ```
    Terminate the cycle. Do not proceed further.
 
@@ -137,7 +137,7 @@ wallet_mapping_path = "~/.zeroclaw/wallet_mapping.json"
    - Compute `grace_expiry_iso` = ISO 8601 UTC of `(unix(record.grace_started_at) + grace_period_days * 86400)` seconds.
    - Post a role removal proposal to Subscribe_Channel:
      ```
-     GET {proxy_base_url}/discord/message?channel_id={subscribe_channel}&content=<URL-encoded: "⚠️ ROLE REMOVAL PROPOSAL: @{record.discord_username}'s grace period has ended (expired at {grace_expiry_iso}). Admin approval required to remove Subscriber_Role.">
+     GET {proxy_base_url}/discord/message?channel_id={subscription_channel}&content=<URL-encoded: "⚠️ ROLE REMOVAL PROPOSAL: @{record.discord_username}'s grace period has ended (expired at {grace_expiry_iso}). Admin approval required to remove Subscriber_Role.">
      ```
    On proxy failure: retry once after 2 seconds. If the second attempt also fails: log the failure and continue to the next subscriber. Do NOT block the entire step on a single failure.
 
@@ -166,7 +166,7 @@ wallet_mapping_path = "~/.zeroclaw/wallet_mapping.json"
    - If the total message length is ≤ 2000 characters: post as one message.
    - If the total message length is > 2000 characters: split at 2000-character boundaries and post as multiple sequential messages in order.
 
-   Post each message via: `GET {proxy_base_url}/discord/message?channel_id={subscribe_channel}&content=<URL-encoded summary>`.
+   Post each message via: `GET {proxy_base_url}/discord/message?channel_id={subscription_channel}&content=<URL-encoded summary>`.
    On proxy failure posting the summary: log the failure. The summary is informational — its failure does NOT affect the correctness of actions already taken.
 
 ---

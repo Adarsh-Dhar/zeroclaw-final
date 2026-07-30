@@ -3,10 +3,14 @@ main = "worker.js"
 compatibility_date = "2024-01-01"
 
 [vars]
-# No plain-text environment variables needed for this worker.
-# All secrets are injected via `wrangler secret put` and accessed through the `env` binding:
+PROXY_BASE_URL = "https://solana-rpc-proxy.dharadarsh0.workers.dev"
+# All other secrets are injected via `wrangler secret put` and accessed through the `env` binding:
 #
-#   wrangler secret put HELIUS_API_KEY    ← revoke and replace the key that was previously hardcoded
+#   wrangler secret put HELIUS_API_KEY
 #   wrangler secret put DISCORD_BOT_TOKEN
+#   wrangler secret put DISCORD_GUILD_ID
+#   wrangler secret put REGISTERED_ROLE_ID
+#   wrangler secret put SIGNUP_CHANNEL_ID
+#   wrangler secret put SUBSCRIPTION_CHANNEL_ID
 #
 # Never add secret values directly to this file.

@@ -1,12 +1,12 @@
 ---
 name: onboarding
-description: Handle a Discord subscribe command by generating a unique Solana Pay URL and QR code, persisting the subscriber record in Memory_Store, and posting the payment link to the Subscribe_Channel.
+description: Handle a Discord subscribe command by generating a unique Solana Pay URL and QR code, persisting the subscriber record in Memory_Store, and posting the payment link to the Subscription_Channel.
 version: 1.0.0
 ---
 
 # Skill: Onboarding — Subscribe Command Handling
 
-This skill is invoked by the `onboarding_check` SOP whenever it detects a `subscribe` command in the Subscribe_Channel. It manages the full onboarding flow: state lookup, reference key generation, Subscriber_Record persistence, Solana Pay URL construction, QR code generation, and Discord message posting.
+This skill is invoked by the `subscription_commands` SOP whenever it detects a `subscribe` command in the Subscription_Channel from a registered user. It manages the full onboarding flow: state lookup, reference key generation, Subscriber_Record persistence, Solana Pay URL construction, QR code generation, and Discord message posting.
 
 **The skill uses only the `http_request` and Memory_Store (memory recall/store) tools. All external API calls route through the Proxy because the `http_request` tool has a POST-body bug — all writes must be issued as GET requests with URL-encoded parameters.**
 
@@ -21,6 +21,7 @@ The SOP provides these values to the skill before invoking it:
 | `discord_user_id` | string | Discord snowflake ID of the user who sent the subscribe command |
 | `discord_username` | string | Discord username of the user (e.g. `adrs0890`) |
 | `tier` | string | Subscription tier parsed from the command message. One of `"standard"` or `"premium"`. Defaults to `"standard"` if absent. |
+| `wallet_address` | string | Solana wallet address (base58) already verified during registration |
 
 ---
 
@@ -29,10 +30,10 @@ The SOP provides these values to the skill before invoking it:
 Embed these values exactly as shown — do not modify them.
 
 ```
-Merchant_Wallet      = pt6Ws1FMbdrLbUZqKooediS8mu6SNvDJodzXUx6ypak
-USDC_Mint            = 4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU
-Subscribe_Channel_ID = 1531347878906302487
-Proxy_Base_URL       = https://solana-rpc-proxy.dharadarsh0.workers.dev
+Merchant_Wallet        = pt6Ws1FMbdrLbUZqKooediS8mu6SNvDJodzXUx6ypak
+USDC_Mint              = 4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU
+Subscription_Channel_ID = 1532423195884261377
+Proxy_Base_URL         = https://solana-rpc-proxy.dharadarsh0.workers.dev
 ```
 
 ---
@@ -67,18 +68,18 @@ When calling `http_request`, you MUST nest all parameters inside an `"arguments"
 Recall the memory key `"subscriber:<discord_user_id>"` from Memory_Store.
 
 **If the record is found and `status = "active"`:**
-- Post the following message to Subscribe_Channel via the Proxy using Discord's mention format:
+- Post the following message to Subscription_Channel via the Proxy using Discord's mention format:
   ```
   <@<discord_user_id>> — Your ZeroClaw subscription is already active. It expires at <expires_at formatted as ISO 8601 UTC, e.g. 2026-08-28T00:00:00Z>.
   ```
   Use:
   ```
-  GET https://solana-rpc-proxy.dharadarsh0.workers.dev/discord/message?channel_id=1531347878906302487&content=<URL-encoded message>
+  GET https://solana-rpc-proxy.dharadarsh0.workers.dev/discord/message?channel_id=1532423195884261377&content=<URL-encoded message>
   ```
 - **STOP. Do not continue to Step 2.**
 
 **If the record is found and `status = "pending_payment"`:**
-- The subscriber already has a pending invoice. Re-use the existing `solana_pay_url` and QR URL stored in the record. Post to Subscribe_Channel via the Proxy using Discord's mention format:
+- The subscriber already has a pending invoice. Re-use the existing `solana_pay_url` and QR URL stored in the record. Post to Subscription_Channel via the Proxy using Discord's mention format:
   ```
   <@<discord_user_id>> — You already have a pending payment. Pay here: <solana_pay_url from record>
   QR: https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=<URL-encoded solana_pay_url from record>
@@ -95,7 +96,7 @@ Recall the memory key `"subscriber:<discord_user_id>"` from Memory_Store.
 Check that the `tier` input is one of `["standard", "premium"]` (exact match, case-sensitive).
 
 **If the tier is unrecognized:**
-- Post to Subscribe_Channel via the Proxy using Discord's mention format:
+- Post to Subscription_Channel via the Proxy using Discord's mention format:
   ```
   <@<discord_user_id>> — Unrecognized subscription tier "<tier>". Available tiers: standard (0.1 USDC / 30 days), premium (0.25 USDC / 30 days). Example: "subscribe standard" or "subscribe premium".
   ```
@@ -116,7 +117,7 @@ Verify that `expected_amount_usdc` satisfies both conditions:
 2. The number of decimal digits in `expected_amount_usdc` is ≤ 6
 
 **If either condition fails:**
-- Post to Subscribe_Channel via the Proxy using Discord's mention format:
+- Post to Subscription_Channel via the Proxy using Discord's mention format:
   ```
   <@<discord_user_id>> — Configuration error: invalid amount for tier "<tier>". Please contact an admin.
   ```
@@ -141,7 +142,7 @@ GET https://solana-rpc-proxy.dharadarsh0.workers.dev/keygen
 ```
 
 **If the response is non-2xx, or the JSON body does not contain a `reference_key` field:**
-- Post to Subscribe_Channel via the Proxy using Discord's mention format:
+- Post to Subscription_Channel via the Proxy using Discord's mention format:
   ```
   <@<discord_user_id>> — Service error: failed to generate a payment reference key. Please try again in a moment.
   ```
@@ -163,7 +164,7 @@ Write the following JSON object to Memory_Store under the key `"subscriber:<disc
 {
   "discord_user_id": "<discord_user_id>",
   "discord_username": "<discord_username>",
-  "wallet_address": null,
+  "wallet_address": "<wallet_address>",
   "tier": "<tier>",
   "expected_amount_usdc": <expected_amount_usdc>,
   "period_days": <period_days>,
@@ -181,7 +182,7 @@ Replace all `<placeholder>` values with the actual inputs and values from earlie
 
 **If the Memory_Store write fails (tool returns an error or does not confirm the write):**
 - Discard the `reference_key` obtained in Step 4 — it must not be reused.
-- Post to Subscribe_Channel via the Proxy using Discord's mention format:
+- Post to Subscription_Channel via the Proxy using Discord's mention format:
   ```
   <@<discord_user_id>> — Service temporarily unavailable. Unable to save your subscription record. Please try again later.
   ```
@@ -251,7 +252,7 @@ GET https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=<URL-encoded s
 URL-encode `solana_pay_url` before inserting it as the `data` parameter value. For example, `solana:` becomes `solana%3A`, `?` becomes `%3F`, `&` becomes `%26`, etc.
 
 **If the call times out (> 10 seconds) or returns a non-2xx response:**
-- Post to Subscribe_Channel via the Proxy using Discord's mention format:
+- Post to Subscription_Channel via the Proxy using Discord's mention format:
   ```
   <@<discord_user_id>> — Service error: failed to generate QR code. Please try again in a moment.
   ```
@@ -263,7 +264,7 @@ URL-encode `solana_pay_url` before inserting it as the `data` parameter value. F
 
 ---
 
-## Step 8: Post Onboarding Message to Subscribe_Channel
+## Step 8: Post Onboarding Message to Subscription_Channel
 
 Construct the following message using Discord's proper mention format with the user ID:
 
@@ -275,10 +276,10 @@ QR: <qr_url>
 
 Use Discord's mention format `<@<discord_user_id>>` (not @username) to ensure proper user tagging regardless of their username format.
 
-Post it to Subscribe_Channel via the Proxy's `/discord/message` endpoint. URL-encode the full message content as the `content` parameter:
+Post it to Subscription_Channel via the Proxy's `/discord/message` endpoint. URL-encode the full message content as the `content` parameter:
 
 ```
-GET https://solana-rpc-proxy.dharadarsh0.workers.dev/discord/message?channel_id=1531347878906302487&content=<URL-encoded message>
+GET https://solana-rpc-proxy.dharadarsh0.workers.dev/discord/message?channel_id=1532423195884261377&content=<URL-encoded message>
 ```
 
 **On success (2xx response):** The onboarding flow is complete.
@@ -296,7 +297,7 @@ GET https://solana-rpc-proxy.dharadarsh0.workers.dev/discord/message?channel_id=
     "error": "Discord message post failed"
   }
   ```
-- Do NOT silently discard the failure. The Subscriber_Record in `pending_payment` state remains valid — the subscriber can recover by re-issuing the subscribe command.
+- Do NOT silently discard the failure. The Subscriber_Record in `pending_payment` state remains valid — the subscriber can recover by re-issuing the subscribe command in Subscription_Channel.
 
 ---
 
@@ -320,7 +321,7 @@ Steps 5b, 6, and 8 do not have hard STOP conditions — Step 5b logs index failu
 
 ## Atomicity Guarantee
 
-The Subscriber_Record is **always written to Memory_Store before any Discord API call** (Step 5 precedes Step 8). If the Discord post fails, the record remains in `pending_payment` state. When the subscriber re-issues the subscribe command, Step 1 detects the `pending_payment` status and re-uses the existing URL without generating a new reference key.
+The Subscriber_Record is **always written to Memory_Store before any Discord API call** (Step 5 precedes Step 8). If the Discord post fails, the record remains in `pending_payment` state. When the subscriber re-issues the subscribe command in Subscription_Channel, Step 1 detects the `pending_payment` status and re-uses the existing URL without generating a new reference key.
 
 This makes the onboarding flow idempotent: multiple subscribe commands from the same user while `status = "pending_payment"` return the same payment link without side effects.
 
