@@ -28,3 +28,8 @@ pending_approvals.json
 .DS_Store
 
 node_modules
+
+.dev.vars*
+!.dev.vars.example
+.env*
+!.env.example

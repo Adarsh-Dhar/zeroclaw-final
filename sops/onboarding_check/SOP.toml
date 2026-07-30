@@ -1,0 +1,11 @@
+[sop]
+name = "onboarding_check"
+description = "Poll Subscribe_Channel every 5 minutes for subscribe commands and invoke the Onboarding SKILL for each qualifying message"
+version = "1.0.0"
+max_concurrent = 1
+admission_policy = "parallel"
+max_pending_approvals = 0
+
+[[triggers]]
+type = "cron"
+schedule = "*/5 * * * *"
