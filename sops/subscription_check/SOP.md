@@ -4,11 +4,11 @@
 
 ```toml
 [tiers.standard]
-amount_usdc = 0.1
+amount_sol = 0.001
 period_days = 30
 
 [tiers.premium]
-amount_usdc = 0.25
+amount_sol = 0.0025
 period_days = 30
 
 [subscription]
@@ -18,7 +18,6 @@ renewal_reminder_days = 5
 [constants]
 proxy_base_url = "https://solana-rpc-proxy.dharadarsh0.workers.dev"
 merchant_wallet = "pt6Ws1FMbdrLbUZqKooediS8mu6SNvDJodzXUx6ypak"
-usdc_mint = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
 discord_guild = "1531347878906302484"
 subscriber_role = "1531669950819733575"
 subscription_channel = "1532423195884261377"
@@ -62,7 +61,7 @@ wallet_mapping_path = "~/.zeroclaw/wallet_mapping.json"
    For each entry in the JSON object:
    - Read `discord_user_id` and `discord_username` from the entry value. The JSON key is the `wallet_address`.
    - Call `GET {proxy_base_url}/keygen` to obtain a fresh `reference_key`. Expected response: `{"reference_key": "<base58 string>"}`. On non-2xx or missing `reference_key` field: skip this entry, continue with remaining entries.
-   - Construct a Subscriber_Record with the schema: discord_user_id, discord_username, wallet_address, tier="standard", expected_amount_usdc=0.1, period_days=30, subscribed_at=null, expires_at=null, grace_started_at=null, reference_key from /keygen, status="pending_payment", last_known_status=null, renewal_dm_sent_for_expiry=null.
+   - Construct a Subscriber_Record with the schema: discord_user_id, discord_username, wallet_address, tier="standard", expected_amount_sol=0.001, period_days=30, subscribed_at=null, expires_at=null, grace_started_at=null, reference_key from /keygen, status="pending_payment", last_known_status=null, renewal_dm_sent_for_expiry=null.
    - Store the record in Memory_Store under key `"subscriber:<discord_user_id>"`.
    After all entries have been processed, collect all successfully seeded `discord_user_id` values into a list and write the subscriber index: `store "subscriber_index" = JSON.stringify(["<id_1>", "<id_2>", ...])`. Set `subscriber_ids` = the list of seeded IDs.
 
@@ -96,12 +95,12 @@ wallet_mapping_path = "~/.zeroclaw/wallet_mapping.json"
    - Record the current `record.expires_at` as `old_expires_at`.
    - Update `record`: set `record.reference_key = new_reference_key`, set `record.status = "pending_payment"`, set `record.renewal_dm_sent_for_expiry = old_expires_at`, keep `record.subscribed_at` and `record.expires_at` unchanged.
    - Persist the updated record to Memory_Store immediately under key `"subscriber:{record.discord_user_id}"`.
-   - Build the renewal Solana Pay URL: `solana:{merchant_wallet}?amount={record.expected_amount_usdc}&spl-token={usdc_mint}&reference={new_reference_key}&label=ZeroClaw+Subscription&memo={record.discord_user_id}`.
+   - Build the renewal Solana Pay URL: `solana:{merchant_wallet}?amount={record.expected_amount_sol}&reference={new_reference_key}&label=ZeroClaw+Subscription&memo={record.discord_user_id}&cluster=devnet`.
    - Build the renewal DM message with subscription details and renewal URL.
    - Send the renewal DM via `GET {proxy_base_url}/discord/dm?user_id={record.discord_user_id}&content=<URL-encoded renewal message>`. On proxy failure: retain `status = "pending_payment"`, log the failure, and proceed to payment check.
 
    **Invoke check-payment SKILL:**
-   Call the `check-payment` SKILL, passing the current `record` as the full context input. The SKILL returns status, role_action, expires_at, and highest_amount_usdc_seen.
+   Call the `check-payment` SKILL, passing the current `record` as the full context input. The SKILL returns status, role_action, expires_at, and highest_amount_sol_seen.
    Update the in-memory `record` based on the SKILL result:
    - Update `record.status` from the SKILL result `status` field.
    - If the SKILL returns a non-null `expires_at`, update `record.expires_at` to that value.
@@ -181,13 +180,13 @@ wallet_mapping_path = "~/.zeroclaw/wallet_mapping.json"
 | `/keygen` non-2xx in Step 1b migration | Non-2xx HTTP | Skip that entry, continue with remaining entries |
 | Individual record load fails in Step 1c | Recall error or bad JSON | Log warning entry, skip subscriber this cycle |
 | `subscriber_index` write fails after migration (Step 1b) | Write tool error | Log error, subscriber records still valid |
-| `/keygen` non-2xx in Step 4a renewal | Non-2xx HTTP | Log error, skip DM, proceed to Step 4b unchanged |
+| `/keygen` non-2xx in Step 3a renewal | Non-2xx HTTP | Log error, skip DM, proceed to Step 3b unchanged |
 | check-payment SKILL returns `check_failed` | SKILL result status | Save `last_known_status`, no role change, post error notice |
-| Grace reminder proxy failure (Step 4c Case A) | Non-2xx HTTP | Retry once after 2s; log and continue if still failing |
-| Discord member check non-2xx (Step 4d) | Non-2xx HTTP | Set `check_failed`, post error notice, skip role action |
-| Discord role grant non-2xx (Step 4d) | Non-2xx HTTP | Set `check_failed`, retain role, post error notice |
-| Memory_Store write failure (Step 4e) | Write tool error | Log error, continue to next subscriber |
-| Summary post failure (Step 5) | Non-2xx HTTP | Log failure, cycle still considered complete |
+| Grace reminder proxy failure (Step 3c Case A) | Non-2xx HTTP | Retry once after 2s; log and continue if still failing |
+| Discord member check non-2xx (Step 3d) | Non-2xx HTTP | Set `check_failed`, post error notice, skip role action |
+| Discord role grant non-2xx (Step 3d) | Non-2xx HTTP | Set `check_failed`, retain role, post error notice |
+| Memory_Store write failure (Step 3e) | Write tool error | Log error, continue to next subscriber |
+| Summary post failure (Step 4) | Non-2xx HTTP | Log failure, cycle still considered complete |
 
 ---
 

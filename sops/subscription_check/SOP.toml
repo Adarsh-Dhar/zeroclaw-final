@@ -4,7 +4,9 @@ description = "Check payment status for subscriber wallets against merchant wall
 version = "1.0.0"
 max_concurrent = 1
 admission_policy = "parallel"
-max_pending_approvals = 0
+max_pending_approvals = 10
+dispatch_mode = "headless"
+auto_approve = true
 
 [[triggers]]
 type = "manual"

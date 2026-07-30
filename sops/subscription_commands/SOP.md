@@ -1,6 +1,6 @@
 # Subscription Commands — Subscribe Command Detection and Processing
 
-Triggered every 5 minutes by the cron scheduler. Polls the Subscription_Channel for recent messages from registered users, detects standalone `subscribe` commands, and invokes the Onboarding SKILL for each qualifying message.
+Triggered every 5 minutes by the cron scheduler. Polls the Signup_Channel for recent messages from registered users, detects standalone `subscribe` commands, and invokes the Onboarding SKILL for each qualifying message.
 
 **Tools allowed:** `http_request`, Memory_Store (memory recall/store). All external API calls route through the Proxy.
 
@@ -23,7 +23,7 @@ mode: "headless"
 ## Constants
 
 ```
-Subscription_Channel_ID  = 1532423195884261377
+Signup_Channel_ID        = 1532423294354063410
 Proxy_Base_URL           = https://solana-rpc-proxy.dharadarsh0.workers.dev
 Onboarding_SKILL         = shared/skills/default/onboarding/SKILL.md
 ```
@@ -32,19 +32,19 @@ Onboarding_SKILL         = shared/skills/default/onboarding/SKILL.md
 
 ## Steps
 
-1. **Poll Subscription_Channel for recent messages** — Retrieve the last 20 messages from Subscription_Channel via the Proxy.
+1. **Poll Signup_Channel for recent messages** — Retrieve the last 20 messages from Signup_Channel via the Proxy.
    - tools: http_request
 
    Call the Proxy's Discord messages passthrough endpoint:
    ```
-   GET https://solana-rpc-proxy.dharadarsh0.workers.dev/discord/channels/1532423195884261377/messages?limit=20
+   GET https://solana-rpc-proxy.dharadarsh0.workers.dev/discord/channels/1532423294354063410/messages?limit=20
    ```
    Expected response (HTTP 200): A JSON array of Discord message objects, ordered newest-first.
 
    **If Memory_Store is unavailable at any point during this cycle:**
-   Post the following reply to Subscription_Channel via the Proxy:
+   Post the following reply to Signup_Channel via the Proxy:
    ```
-   GET https://solana-rpc-proxy.dharadarsh0.workers.dev/discord/message?channel_id=1532423195884261377&content=service%20temporarily%20unavailable
+   GET https://solana-rpc-proxy.dharadarsh0.workers.dev/discord/message?channel_id=1532423294354063410&content=service%20temporarily%20unavailable
    ```
    ABORT the entire cycle immediately. Do NOT create any partial Subscriber_Records.
 

@@ -4,10 +4,10 @@ description = "Poll Signup_Channel every 5 minutes for register commands and inv
 version = "1.0.0"
 max_concurrent = 1
 admission_policy = "parallel"
-max_pending_approvals = 0
+max_pending_approvals = 100
 dispatch_mode = "headless"
 auto_approve = true
 
 [[triggers]]
 type = "cron"
-expression = "*/5 * * * *"
+expression = "0 * * * *"

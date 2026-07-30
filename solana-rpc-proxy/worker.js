@@ -25,6 +25,17 @@ export function isValidDmContent(decoded) {
   return decoded.length >= 1 && decoded.length <= 2000;
 }
 
+// Pure helper: HTML-escapes a string to prevent XSS
+// Escapes <, >, &, ", and ' characters
+function escapeHtml(unsafe) {
+  return unsafe
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
 function encodeBase58(bytes) {
   // Count leading zero bytes — each becomes a '1' character
   let leadingZeros = 0;
@@ -95,7 +106,14 @@ function nonceIsFresh(nonce, maxAgeMs = 5 * 60 * 1000) {
   return Date.now() - issuedAt <= maxAgeMs;
 }
 
+function validateNonceDiscordId(nonce, expectedDiscordId) {
+  const match = nonce.match(/\|discord:(\d+)\|/);
+  if (!match) return false;
+  return match[1] === expectedDiscordId;
+}
+
 function buildRegisterPage(discordId, discordUsername, nonce, proxyBaseUrl) {
+  const safeUsername = escapeHtml(discordUsername || discordId);
   return `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>ZeroClaw — Verify Wallet</title>
 <style>body{font-family:system-ui;max-width:480px;margin:60px auto;padding:0 20px;text-align:center}
@@ -103,7 +121,7 @@ button{padding:12px 24px;font-size:16px;border-radius:8px;border:none;background
 #status{margin-top:20px;color:#555}</style></head>
 <body>
 <h2>Verify your wallet</h2>
-<p>Registering for Discord user <b>${discordUsername || discordId}</b></p>
+<p>Registering for Discord user <b>${safeUsername}</b></p>
 <p>This proves you control the wallet — it does not send any transaction or reveal your private key.</p>
 <button id="connect">Connect &amp; Sign</button>
 <div id="status"></div>
@@ -189,7 +207,7 @@ export default {
 
       // Nonce must reference this exact discord_id (prevents replaying someone
       // else's page load against a different wallet) and be recent.
-      if (!nonce.includes(`discord:${discord_id}|`)) {
+      if (!validateNonceDiscordId(nonce, discord_id)) {
         return new Response(JSON.stringify({ error: 'nonce_discord_mismatch' }), { status: 400 });
       }
       if (!nonceIsFresh(nonce)) {
@@ -215,6 +233,12 @@ export default {
       // Grant the Registered role directly (this is the one place a role grant
       // happens without going through the SOP, since it's a direct consequence
       // of a verified cryptographic proof, not a chat claim).
+      
+      // Validate required environment variables
+      if (!env.DISCORD_GUILD_ID || !env.REGISTERED_ROLE_ID || !env.DISCORD_BOT_TOKEN) {
+        return new Response(JSON.stringify({ error: 'server_configuration_error' }), { status: 500 });
+      }
+      
       const roleResp = await fetch(
         `https://discord.com/api/v10/guilds/${env.DISCORD_GUILD_ID}/members/${discord_id}/roles/${env.REGISTERED_ROLE_ID}`,
         { method: 'PUT', headers: { Authorization: `Bot ${env.DISCORD_BOT_TOKEN}` } }
@@ -223,19 +247,25 @@ export default {
         return new Response(JSON.stringify({ error: 'role_grant_failed', status: roleResp.status }), { status: 502 });
       }
 
-      // Notify #signup and post the verified mapping into #subscription so the
+      // Notify #signup and post the verified mapping into #signup so the
       // onboarding_check SOP can pick it up and persist it into Memory_Store —
       // the Worker itself never touches Memory_Store directly.
+      
+      // Validate required environment variables for notification
+      if (!env.SIGNUP_CHANNEL_ID || !env.DISCORD_BOT_TOKEN) {
+        return new Response(JSON.stringify({ error: 'server_configuration_error' }), { status: 500 });
+      }
+      
       await fetch(
         `https://discord.com/api/v10/channels/${env.SIGNUP_CHANNEL_ID}/messages`,
         {
           method: 'POST',
           headers: { Authorization: `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ content: `✅ <@${discord_id}> wallet verified. Head to <#${env.SUBSCRIPTION_CHANNEL_ID}> to subscribe.` }),
+          body: JSON.stringify({ content: `✅ <@${discord_id}> wallet verified. You can now subscribe in this channel.` }),
         }
       );
       await fetch(
-        `https://discord.com/api/v10/channels/${env.SUBSCRIPTION_CHANNEL_ID}/messages`,
+        `https://discord.com/api/v10/channels/${env.SIGNUP_CHANNEL_ID}/messages`,
         {
           method: 'POST',
           headers: { Authorization: `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' },

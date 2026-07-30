@@ -13,7 +13,6 @@ This skill receives a `Subscriber_Record` object from SOP context and performs p
 ## Constants
 
 - **Proxy URL:** `https://solana-rpc-proxy.dharadarsh0.workers.dev`
-- **USDC Mint:** `4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU`
 - **Merchant Wallet:** `pt6Ws1FMbdrLbUZqKooediS8mu6SNvDJodzXUx6ypak`
 - **Discord Guild ID:** `1531347878906302484`
 - **Subscriber Role ID:** `1531669950819733575`
@@ -42,16 +41,16 @@ A `Subscriber_Record` object from SOP context with the following fields:
 | `discord_user_id` | string | Discord snowflake ID of the subscriber |
 | `discord_username` | string | Discord username |
 | `reference_key` | string | Base58-encoded 32-byte reference key for the current invoice |
-| `expected_amount_usdc` | number | Required USDC amount (e.g. `0.1` or `0.25`) |
+| `expected_amount_sol` | number | Required SOL amount (e.g. `0.001` or `0.0025`) |
 | `period_days` | integer | Subscription duration in days (e.g. `30`) |
 | `subscribed_at` | string \| null | ISO 8601 UTC timestamp of last confirmed payment, or `null` if pending |
 | `status` | string | Current status: `pending_payment`, `active`, `lapsed`, `grace`, `expired`, `check_failed` |
 | (other fields) | various | All other Subscriber_Record fields as defined in the schema |
 
-## Pre-flight: Validate expected_amount_usdc
+## Pre-flight: Validate expected_amount_sol
 
-Before making any RPC calls, validate the `expected_amount_usdc` field from the Subscriber_Record:
-- If `expected_amount_usdc` is absent, `null`, or not a valid positive number, this is a configuration error.
+Before making any RPC calls, validate the `expected_amount_sol` field from the Subscriber_Record:
+- If `expected_amount_sol` is absent, `null`, or not a valid positive number, this is a configuration error.
 - Log the error (e.g., write a memory entry: `"error:config:<discord_user_id>"` with the nature of the failure).
 - Set `status = "check_failed"`.
 - Do NOT update the subscriber's Discord role.
@@ -61,7 +60,7 @@ Before making any RPC calls, validate the `expected_amount_usdc` field from the 
     "status": "check_failed",
     "role_action": "no_change",
     "expires_at": null,
-    "highest_amount_usdc_seen": null
+    "highest_amount_sol_seen": null
   }
   ```
 
@@ -81,7 +80,7 @@ GET https://solana-rpc-proxy.dharadarsh0.workers.dev/?method=getSignaturesForAdd
     "status": "check_failed",
     "role_action": "no_change",
     "expires_at": null,
-    "highest_amount_usdc_seen": null
+    "highest_amount_sol_seen": null
   }
   ```
 - Do NOT proceed to any further steps.
@@ -113,32 +112,27 @@ subscribed_at_unix ≤ blockTime ≤ subscribed_at_unix + period_days × 86400
 ```
 Transactions outside this window are discarded.
 
-### Condition B: USDC SPL Token Transfer Instruction
-The transaction must contain a USDC SPL token transfer instruction. This means there must be an instruction in `transaction.message.instructions` or within `meta.innerInstructions[*].instructions` where:
-- `program` is `"spl-token"`
-- `parsed.type` is `"transfer"` or `"transferChecked"`
+### Condition B: Native SOL Transfer Instruction
+The transaction must contain a native SOL transfer instruction. This means there must be an instruction in `transaction.message.instructions` or within `meta.innerInstructions[*].instructions` where:
+- `program` is `"system"` (System Program)
+- `parsed.type` is `"transfer"`
 
 ### Condition C: Transfer Destination is Merchant Wallet
-The transfer destination (the `destination` or `account` field in `parsed.info`) must be either:
-- **Directly** the Merchant Wallet address `pt6Ws1FMbdrLbUZqKooediS8mu6SNvDJodzXUx6ypak`, OR
-- **An Associated Token Account (ATA) owned by the Merchant Wallet**: check `meta.postTokenBalances` for an entry whose `owner` field equals `pt6Ws1FMbdrLbUZqKooediS8mu6SNvDJodzXUx6ypak` and whose account index corresponds to the destination account.
+The transfer destination (the `destination` or `account` field in `parsed.info`) must be exactly the Merchant Wallet address `pt6Ws1FMbdrLbUZqKooediS8mu6SNvDJodzXUx6ypak`.
 
-### Condition D: USDC Mint Matches
-The USDC mint must equal `4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU`. For `transferChecked` instructions, verify `parsed.info.mint`. For plain `transfer` instructions without a `mint` field in `parsed.info`, verify via `meta.postTokenBalances` (find the destination's token balance entry and check its `mint` field).
-
-### Condition E: Amount ≥ Required (integer arithmetic)
-Read the raw integer token units from `parsed.info.tokenAmount.amount` (for `transferChecked`) or `parsed.info.amount` (for `transfer`). Parse as an integer. This amount must satisfy:
+### Condition D: Amount ≥ Required (integer arithmetic)
+Read the raw integer lamports from `parsed.info.lamports`. Parse as an integer. This amount must satisfy:
 ```
-raw_integer_amount ≥ expected_amount_usdc × 1,000,000
+raw_lamports ≥ expected_amount_sol × 1,000,000,000
 ```
-This comparison MUST be done with integer arithmetic only — no floating-point rounding. For example, for `expected_amount_usdc = 0.1`, the threshold is exactly `100000` raw units.
+This comparison MUST be done with integer arithmetic only — no floating-point rounding. For example, for `expected_amount_sol = 0.001`, the threshold is exactly `1000000` lamports.
 
 ### Tracking Highest Amount Seen
-As you iterate over all instructions in all transactions, track the highest USDC transfer amount seen across ALL USDC transfers (qualifying or not) to the Merchant Wallet. Express this as:
+As you iterate over all instructions in all transactions, track the highest SOL transfer amount seen across ALL SOL transfers (qualifying or not) to the Merchant Wallet. Express this as:
 ```
-highest_amount_usdc_seen = max_raw_units / 1,000,000
+highest_amount_sol_seen = max_lamports / 1,000,000,000
 ```
-(a float with 6 decimal places, e.g. `9.500000`). If no USDC transfers are found at all, this value remains `null`.
+(a float with 9 decimal places, e.g. `0.001500000`). If no SOL transfers are found at all, this value remains `null`.
 
 ## Step 4: Qualifying Transactions Found
 
@@ -153,7 +147,7 @@ Proceed to Step 7.
 
 ## Step 5: No Qualifying Transactions — Insufficient Amount
 
-If NO qualifying transactions were found, but at least one USDC transfer to the Merchant Wallet was detected with an amount below the required threshold:
+If NO qualifying transactions were found, but at least one SOL transfer to the Merchant Wallet was detected with an amount below the required threshold:
 - Set `status = "lapsed"`.
 - Post a notice to Subscribe_Channel via proxy:
   ```
@@ -161,14 +155,14 @@ If NO qualifying transactions were found, but at least one USDC transfer to the 
   ```
   Message content (URL-encode before sending):
   ```
-  ⚠️ @{discord_username} — payment detected but amount insufficient. Highest amount seen: {highest_amount_usdc_seen} USDC. Required: {expected_amount_usdc} USDC.
+  ⚠️ @{discord_username} — payment detected but amount insufficient. Highest amount seen: {highest_amount_sol_seen} SOL. Required: {expected_amount_sol} SOL.
   ```
 
 Proceed to Step 7.
 
-## Step 6: No USDC Transactions Found
+## Step 6: No SOL Transactions Found
 
-If NO USDC transfers were found at all (no transactions matched conditions B–D, regardless of amount):
+If NO SOL transfers were found at all (no transactions matched conditions B–D, regardless of amount):
 - Set `status = "lapsed"`.
 
 Proceed to Step 7.
@@ -235,7 +229,7 @@ After completing all steps, return the following JSON object:
   "status": "<active|lapsed|check_failed>",
   "role_action": "<grant_role|propose_removal|no_change>",
   "expires_at": "<ISO 8601 UTC string or null>",
-  "highest_amount_usdc_seen": "<float with 6 decimal places or null>"
+  "highest_amount_sol_seen": "<float with 9 decimal places or null>"
 }
 ```
 
@@ -246,16 +240,16 @@ After completing all steps, return the following JSON object:
 | `status` | Final effective status after payment evaluation. One of: `active`, `lapsed`, `check_failed`. |
 | `role_action` | Action taken (or proposed) for the Discord role. One of: `grant_role`, `propose_removal`, `no_change`. |
 | `expires_at` | ISO 8601 UTC string of subscription expiry (`blockTime + period_days × 86400`), or `null` if payment was not confirmed. |
-| `highest_amount_usdc_seen` | Highest USDC amount observed in any USDC transfer to the Merchant Wallet, expressed as a float with 6 decimal places (e.g. `9.500000`). `null` if no USDC transfers were found. |
+| `highest_amount_sol_seen` | Highest SOL amount observed in any SOL transfer to the Merchant Wallet, expressed as a float with 9 decimal places (e.g. `0.001500000`). `null` if no SOL transfers were found. |
 
 ## Error Summary
 
 | Failure | Response |
 |---|---|
-| `expected_amount_usdc` absent, null, or non-numeric | Return `{status: "check_failed", role_action: "no_change", expires_at: null, highest_amount_usdc_seen: null}` immediately; log config error. |
-| `getSignaturesForAddress` proxy error (non-2xx, timeout, bad JSON) | Return `{status: "check_failed", role_action: "no_change", expires_at: null, highest_amount_usdc_seen: null}` immediately. |
+| `expected_amount_sol` absent, null, or non-numeric | Return `{status: "check_failed", role_action: "no_change", expires_at: null, highest_amount_sol_seen: null}` immediately; log config error. |
+| `getSignaturesForAddress` proxy error (non-2xx, timeout, bad JSON) | Return `{status: "check_failed", role_action: "no_change", expires_at: null, highest_amount_sol_seen: null}` immediately. |
 | `getTransaction` error for a specific signature | Mark that signature as failed; continue processing remaining signatures. |
 | Discord role check returns non-2xx | Set `role_check_failed = true`; apply `role_action = "no_change"`. |
 | Discord role grant returns non-2xx | Set `status = "check_failed"` for this cycle; retain existing role; post error notice to Subscribe_Channel. |
 | `status = "check_failed"` (any cause) | Post error notice to Subscribe_Channel including subscriber's Discord mention and failure timestamp. |
-| Insufficient-amount USDC transfer detected | Set `status = "lapsed"`; post insufficient-amount notice to Subscribe_Channel. |
+| Insufficient-amount SOL transfer detected | Set `status = "lapsed"`; post insufficient-amount notice to Subscribe_Channel. |
