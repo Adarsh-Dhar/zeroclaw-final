@@ -4,7 +4,7 @@
 
 This design replaces the static `wallet_mapping.json`-based subscription system with a fully self-service, Solana Pay-driven flow for the ZeroClaw `test_agent`. Subscribers type a `subscribe` command in Discord, receive a Solana Pay URL and QR code, pay in USDC, and the system automatically verifies the on-chain payment and manages their Discord role.
 
-The architecture is constrained by the ZeroClaw runtime: the agent's `locked_down` risk profile allows only `http_request` and `read_file` tools, and the `http_request` tool has a POST body bug that routes all writes through the existing Cloudflare Worker proxy via GET requests with URL-encoded parameters. No private keys are held anywhere (T0 custody tier).
+The architecture is constrained by the ZeroClaw runtime: the agent's `locked_down` risk profile allows only `http_request` and `read_file` tools, and the `http_request` tool has a POST body bug that routes all writes through the existing Cloudflare Worker proxy via GET requests with URL-encoded parameters. No private keys are held anywhere and the system never signs transactions (T1 custody tier).
 
 **Key design decisions:**
 

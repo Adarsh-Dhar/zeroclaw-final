@@ -194,6 +194,10 @@ zeroclaw cron list
 - If grace period expires AND user has subscriber role
 - System posts role removal proposal to Discord channel
 - Requires admin approval to remove role
+- After reacting ✅ to approve removal, execute via:
+  ```bash
+  ./execute_role_removals.sh <discord_user_id> <guild_id> <role_id>
+  ```
 
 **No Change:**
 - If payment status matches current role status
@@ -201,11 +205,11 @@ zeroclaw cron list
 
 ### Security Features
 
-**Custody Tier: T0**
-- System holds no private keys
+**Custody Tier: T1**
+- System holds no private keys and never signs transactions
+- Builds unsigned Solana Pay transfer-request URLs (`solana:<merchant>?amount=...&reference=...`) for the subscriber to sign in their own wallet
+- A human (the subscriber) always signs — the agent never touches a private key
 - Cloudflare Worker proxy holds no keys (stateless, read-only RPC relay)
-- Agent never signs transactions
-- Only reads on-chain data for verification
 - Role management via Discord bot token (which itself holds no funds)
 
 ## Known Limitations

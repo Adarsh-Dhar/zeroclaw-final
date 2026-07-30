@@ -193,7 +193,7 @@ export default {
     // Matches /discord/guilds/<guild_id>/members/<user_id>/roles/<role_id>
     // Accepts GET from the proxy client but translates to PUT for the Discord API
     const guildMemberRoleMatch = url.pathname.match(/^\/discord\/guilds\/([^/]+)\/members\/([^/]+)\/roles\/([^/]+)$/);
-    if (guildMemberRoleMatch) {
+    if (guildMemberRoleMatch && request.method === 'GET') {
       const guildId = guildMemberRoleMatch[1];
       const userId = guildMemberRoleMatch[2];
       const roleId = guildMemberRoleMatch[3];
@@ -210,6 +210,27 @@ export default {
 
       const body = await discordRes.text();
       return new Response(body, { status: discordRes.status });
+    }
+
+    // Handle Discord guild member role removal
+    // Matches /discord/guilds/<guild_id>/members/<user_id>/roles/<role_id>
+    // Accepts GET from the proxy client but translates to DELETE for the Discord API
+    if (guildMemberRoleMatch && request.method === 'DELETE') {
+      const guildId = guildMemberRoleMatch[1];
+      const userId = guildMemberRoleMatch[2];
+      const roleId = guildMemberRoleMatch[3];
+
+      const discordRes = await fetch(
+        `https://discord.com/api/v10/guilds/${guildId}/members/${userId}/roles/${roleId}`,
+        {
+          method: 'DELETE',
+          headers: {
+            'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`,
+          },
+        }
+      );
+
+      return new Response(null, { status: discordRes.status });
     }
 
     // Handle Discord message posting
