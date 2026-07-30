@@ -3,13 +3,15 @@ schema_version = 3
 [risk_profiles]
 
 [risk_profiles.locked_down]
-allowed_commands = ["git", "npm", "cargo", "ls", "cat", "grep", "find", "echo", "pwd", "wc", "head", "tail", "date", "df", "du", "uname", "uptime", "hostname", "python", "python3", "pip", "node", "zeroclaw", "/path/to/your/check_payments_script.sh", "curl"]
+allowed_commands = ["git", "npm", "cargo", "ls", "cat", "grep", "find", "echo", "pwd", "wc", "head", "tail", "date", "df", "du", "uname", "uptime", "hostname", "python", "python3", "pip", "node", "zeroclaw", "curl"]
+allowed_tools = ["http_request", "read_file", "memory_store", "memory_recall"]
 block_high_risk_commands = true
 forbidden_paths = ["/etc", "/root", "/home", "/usr", "/bin", "/sbin", "/lib", "/opt", "/boot", "/dev", "/proc", "/sys", "/var", "/tmp", "~/.ssh", "~/.gnupg", "~/.aws", "~/.config"]
 level = "full"
 require_approval_for_medium_risk = false
 sandbox_enabled = true
 workspace_only = true
+allow_internal_apis = true
 
 [runtime_profiles.unbounded]
 agentic = true
@@ -98,12 +100,6 @@ rpc_url = "https://api.mainnet-beta.solana.com"  # Or your private RPC endpoint
 [custom]
 solana_rpc_proxy_url = "https://your-proxy.workers.dev"  # Cloudflare Worker proxy URL (see solana-rpc-proxy/ directory)
 
-# Note: this agent does not have file-read access. Payment checks are
-# triggered via ~/.zeroclaw/run_subscription_check.sh, which injects
-# wallet_mapping.json contents into the agent's prompt directly.
-# Do not rely on cron calling `zeroclaw agent` directly — it must go
-# through the wrapper script.
-
 [channels]
 
 [channels.discord]
@@ -116,19 +112,16 @@ server_id = "YOUR_DISCORD_SERVER_ID"  # Your Discord server ID
 subscriber_role_id = "YOUR_SUBSCRIBER_ROLE_ID"  # From Discord role settings
 
 [skill_bundles.default]
-directory = "shared/skills/default"
+directory = "/path/to/your/project/shared/skills/default"  # Update with your actual path
 
 [sop]
-sops_dir = "/path/to/your/agent/workspace/sops"  # Update with your actual path
+sops_dir = "sops"  # Relative to workspace path
+
+[workspace]
+path = "/path/to/your/project"  # Update with your actual path
 
 [scheduler]
 enabled = true
-
-[cron.subscription_check]
-job_type = "agent"
-agent = "test_agent"
-schedule = { kind = "cron", expr = "0 * * * *" }  # Every hour
-message = "Execute the subscription_check SOP to check payment status for all wallets"
 
 [gateway]
 paired_tokens = ["YOUR_PAIRED_TOKEN"]  # From zeroclaw gateway paircode

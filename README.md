@@ -55,7 +55,7 @@ subscriber_role_id = "YOUR_SUBSCRIBER_ROLE_ID"  # from Discord role settings
 directory = "/Users/adarsh/Documents/zeroclaw/shared/skills/default"
 
 [sop]
-sops_dir = "/Users/adarsh/.zeroclaw/agents/test_agent/workspace/sops"
+sops_dir = "/Users/adarsh/Documents/zeroclaw/sops"
 
 [workspace]
 path = "/Users/adarsh/Documents/zeroclaw"
@@ -96,8 +96,8 @@ The skills are located at:
 
 The SOPs are located at:
 ```
-~/.zeroclaw/agents/test_agent/workspace/sops/subscription_check/
-~/.zeroclaw/agents/test_agent/workspace/sops/onboarding_check/
+/Users/adarsh/Documents/zeroclaw/sops/subscription_check/
+/Users/adarsh/Documents/zeroclaw/sops/onboarding_check/
 ```
 
 **subscription_check SOP:**
@@ -225,7 +225,8 @@ ZeroClaw's built-in `http_request` tool does not transmit a POST request body (c
 ```
 ~/.zeroclaw/
 ├── config.toml                          # Main ZeroClaw configuration
-├── agents/test_agent/workspace/sops/
+├── agents/test_agent/workspace/          # Agent workspace (managed by ZeroClaw)
+├── sops/
 │   ├── subscription_check/
 │   │   ├── SOP.toml                     # SOP trigger configuration (cron: hourly)
 │   │   └── SOP.md                       # Payment checking and role management steps
