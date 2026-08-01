@@ -38,7 +38,10 @@ PROXY_BASE             = "https://solana-rpc-proxy.dharadarsh0.workers.dev"
 MERCHANT_WALLET        = "pt6Ws1FMbdrLbUZqKooediS8mu6SNvDJodzXUx6ypak"
 DISCORD_GUILD_ID       = "1531347878906302484"
 SUBSCRIBER_ROLE_ID     = "1531669950819733575"
+# Channel where the bot posts summaries / role-removal proposals
 SUBSCRIPTION_CHANNEL_ID = "1531347878906302487"
+# Channel where users type commands (subscribe, delete, etc.)
+COMMAND_CHANNEL_ID     = "1532423294354063410"
 GRACE_PERIOD_DAYS      = 3
 RENEWAL_REMINDER_DAYS  = 5
 
@@ -162,9 +165,16 @@ def proxy_get(path: str):
     return _urllib_get(f"{PROXY_BASE}{path}")
 
 
-def post_channel_message(content: str):
+def post_reply(content: str, channel_id: str = None):
+    """Post a message to a channel via the proxy. Defaults to SUBSCRIPTION_CHANNEL_ID."""
+    cid = channel_id or SUBSCRIPTION_CHANNEL_ID
     encoded = urllib.parse.quote(content)
-    proxy_get(f"/discord/message?channel_id={SUBSCRIPTION_CHANNEL_ID}&content={encoded}")
+    proxy_get(f"/discord/message?channel_id={cid}&content={encoded}")
+
+
+def post_channel_message(content: str):
+    """Post to the subscription summary channel (operator-facing)."""
+    post_reply(content, SUBSCRIPTION_CHANNEL_ID)
 
 
 def kv_get(key: str):
@@ -604,30 +614,23 @@ def _save_last_msg_id(msg_id: str):
 
 
 def handle_commands():
-    """Poll Subscribe_Channel for user commands and act on them immediately."""
+    """Poll COMMAND_CHANNEL_ID for user commands and act on them immediately."""
     last_id = _load_last_msg_id()
 
-    url = (
-        f"{PROXY_BASE}/discord/channels/{SUBSCRIPTION_CHANNEL_ID}/messages?limit=50"
-    )
-    if last_id:
-        url += f"&after={last_id}"
-
     raw = proxy_get(
-        f"/discord/channels/{SUBSCRIPTION_CHANNEL_ID}/messages?limit=50"
+        f"/discord/channels/{COMMAND_CHANNEL_ID}/messages?limit=50"
         + (f"&after={last_id}" if last_id else "")
     )
 
     if not isinstance(raw, list):
-        log.warning("Could not fetch channel messages: %r", raw)
+        log.warning("Could not fetch command channel messages: %r", raw)
         return
 
     if not raw:
-        log.info("No new channel messages since last check.")
+        log.info("No new command channel messages since last check.")
         return
 
-    # Messages come newest-first; reverse to process oldest-first so last_id
-    # advances monotonically.
+    # Messages come newest-first; reverse to process oldest-first
     messages = list(reversed(raw))
     newest_id = raw[0].get("id")  # raw[0] is newest
 
@@ -639,12 +642,11 @@ def handle_commands():
         user_id  = author.get("id") or ""
         username = author.get("global_name") or author.get("username") or user_id
         content  = (msg.get("content") or "").strip()
-        msg_id   = msg.get("id") or ""
 
         if not user_id or not content:
             continue
 
-        log.info("Command message from %s (%s): %r", username, user_id, content[:80])
+        log.info("Command from %s (%s): %r", username, user_id, content[:80])
 
         # ── DELETE / CANCEL subscription ────────────────────────────────
         if DELETE_PATTERNS.search(content):
@@ -668,8 +670,9 @@ def _handle_delete(user_id: str, username: str):
 
     cancellable = {"active", "pending_payment", "grace", "lapsed"}
     if record is None or record.get("status") not in cancellable:
-        post_channel_message(
-            f"<@{user_id}> — You don't have an active subscription to cancel."
+        post_reply(
+            f"<@{user_id}> — You don't have an active subscription to cancel.",
+            COMMAND_CHANNEL_ID,
         )
         log.info("No active subscription to delete for %s", user_id)
         return
@@ -709,10 +712,11 @@ def _handle_delete(user_id: str, username: str):
         kv_put("subscriber_index", index)
         log.info("Removed %s from subscriber_index", user_id)
 
-    post_channel_message(
+    post_reply(
         f"<@{user_id}> — Your subscription has been cancelled and your "
         "subscriber role has been removed. "
-        "You can re-subscribe at any time with `subscribe`."
+        "You can re-subscribe at any time with `subscribe`.",
+        COMMAND_CHANNEL_ID,
     )
 
 
@@ -732,27 +736,30 @@ def _handle_subscribe(user_id: str, username: str, content: str):
 
     # If already pending, re-send existing link
     if record and record.get("status") == "pending_payment" and record.get("pay_url"):
-        post_channel_message(
+        post_reply(
             f"<@{user_id}> — You already have a pending payment. Pay here:\n"
-            f"{record['pay_url']}"
+            f"{record['pay_url']}",
+            COMMAND_CHANNEL_ID,
         )
         return
 
     # If already active, remind them
     if record and record.get("status") == "active":
-        post_channel_message(
+        post_reply(
             f"<@{user_id}> — You already have an active subscription "
             f"(expires {record.get('expires_at', 'N/A')}). "
-            "Use `delete my subscription` to cancel first, or wait for renewal."
+            "Use `delete my subscription` to cancel first, or wait for renewal.",
+            COMMAND_CHANNEL_ID,
         )
         return
 
     # Generate a new reference key and post the pay link
     keygen = proxy_get("/keygen")
     if not isinstance(keygen, dict) or not keygen.get("reference_key"):
-        post_channel_message(
+        post_reply(
             f"<@{user_id}> — Service error generating payment link. "
-            "Please try again in a moment."
+            "Please try again in a moment.",
+            COMMAND_CHANNEL_ID,
         )
         log.warning("keygen failed for subscribe command from %s", user_id)
         return
@@ -784,10 +791,11 @@ def _handle_subscribe(user_id: str, username: str, content: str):
     save_record(new_record)
     ensure_in_index(user_id)
 
-    post_channel_message(
+    post_reply(
         f"<@{user_id}> — ZeroClaw {tier} subscription "
         f"({amount} SOL / {period_days} days)\n"
-        f"⚡ Pay here: {pay_url}"
+        f"⚡ Pay here: {pay_url}",
+        COMMAND_CHANNEL_ID,
     )
     log.info("Posted pay link to %s for tier=%s ref=%s", user_id, tier, ref_key)
 
