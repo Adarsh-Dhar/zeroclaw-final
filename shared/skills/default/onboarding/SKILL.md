@@ -1,6 +1,6 @@
 ---
 name: onboarding
-description: Handle a Discord subscribe command by generating a unique Solana Pay URL and QR code, persisting the subscriber record in proxy storage, and posting the payment link to the Subscribe_Channel.
+description: Handle a Discord subscribe command by generating a unique Solana Pay URL and self-hosted payment page, persisting the subscriber record in proxy storage, and posting the payment link to the Subscribe_Channel.
 version: 1.0.0
 tools:
   - http_request
