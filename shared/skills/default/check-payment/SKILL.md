@@ -2,6 +2,10 @@
 name: check-payment
 description: Check payment status for Solana Pay subscriptions using per-user reference keys, enforce amount verification, respect subscription windows, and manage Discord roles.
 version: 1.0.0
+tools:
+  - http_request
+  - memory_store
+  - memory_recall
 ---
 
 # Skill: Check Payment Status and Manage Discord Roles
@@ -17,6 +21,7 @@ This skill receives a `Subscriber_Record` object from SOP context and performs p
 - **Discord Guild ID:** `1531347878906302484`
 - **Subscriber Role ID:** `1531669950819733575`
 - **Subscribe Channel ID:** `1531347878906302487`
+- **Signup Channel ID:** `1532423294354063410`
 
 ## Tool Call Format (critical — follow exactly)
 
@@ -60,15 +65,16 @@ Before making any RPC calls, validate the `expected_amount_sol` field from the S
     "status": "check_failed",
     "role_action": "no_change",
     "expires_at": null,
-    "highest_amount_sol_seen": null
+    "highest_amount_sol_seen": null,
+    "sender_wallet": null
   }
   ```
 
-## Step 1: Fetch Signatures for Reference Key
+## Step 1: Fetch Signatures for Merchant Wallet
 
 Call:
 ```
-GET https://solana-rpc-proxy.dharadarsh0.workers.dev/?method=getSignaturesForAddress&wallet={reference_key}&limit=100
+GET https://solana-rpc-proxy.dharadarsh0.workers.dev/?method=getSignaturesForAddress&wallet={merchant_wallet}&limit=100
 ```
 
 **On any proxy error** (non-2xx status, timeout, or unparseable JSON):
@@ -80,7 +86,8 @@ GET https://solana-rpc-proxy.dharadarsh0.workers.dev/?method=getSignaturesForAdd
     "status": "check_failed",
     "role_action": "no_change",
     "expires_at": null,
-    "highest_amount_sol_seen": null
+    "highest_amount_sol_seen": null,
+    "sender_wallet": null
   }
   ```
 - Do NOT proceed to any further steps.
@@ -127,6 +134,21 @@ raw_lamports ≥ expected_amount_sol × 1,000,000,000
 ```
 This comparison MUST be done with integer arithmetic only — no floating-point rounding. For example, for `expected_amount_sol = 0.001`, the threshold is exactly `1000000` lamports.
 
+### Condition E: User Identification (Best Effort)
+Since Solana Pay memos are not reliably included by all wallets and reference keys may not appear in transaction data, we use a best-effort approach:
+
+**If the Subscriber_Record has a `wallet_address` field (not null):**
+- Extract the sender wallet from the transfer instruction's `source` field in `parsed.info`
+- This sender wallet should match the `wallet_address` field from the Subscriber_Record
+- If they don't match, discard the transaction
+
+**If the Subscriber_Record has no `wallet_address` (null):**
+- Skip wallet address validation
+- Accept the transaction based on amount, destination, and timing alone
+- This allows manual recovery for users who haven't completed wallet registration
+
+**Note**: The reference key in the Solana Pay URL is primarily for idempotency and tracking purposes, but cannot be reliably extracted from the transaction data since not all wallets include it as an account key or memo.
+
 ### Tracking Highest Amount Seen
 As you iterate over all instructions in all transactions, track the highest SOL transfer amount seen across ALL SOL transfers (qualifying or not) to the Merchant Wallet. Express this as:
 ```
@@ -138,10 +160,12 @@ highest_amount_sol_seen = max_lamports / 1,000,000,000
 
 If one or more transactions satisfy ALL conditions in Step 3:
 - Select the transaction with the **highest `blockTime`** (most recent).
+- Extract the sender wallet address from the winning transaction's transfer instruction `source` field
 - Set:
   - `status = "active"`
   - `subscribed_at` = ISO 8601 UTC string derived from the winning `blockTime` (e.g., `"2026-07-29T12:00:00.000Z"`)
   - `expires_at` = ISO 8601 UTC string derived from `blockTime + period_days × 86400` seconds
+  - `sender_wallet` = the extracted sender wallet address
 
 Proceed to Step 7.
 
@@ -149,6 +173,7 @@ Proceed to Step 7.
 
 If NO qualifying transactions were found, but at least one SOL transfer to the Merchant Wallet was detected with an amount below the required threshold:
 - Set `status = "lapsed"`.
+- Set `sender_wallet = null` (no qualifying transaction found).
 - Post a notice to Subscribe_Channel via proxy:
   ```
   GET https://solana-rpc-proxy.dharadarsh0.workers.dev/discord/message?channel_id=1531347878906302487&content=<URL-encoded message>
@@ -164,6 +189,7 @@ Proceed to Step 7.
 
 If NO SOL transfers were found at all (no transactions matched conditions B–D, regardless of amount):
 - Set `status = "lapsed"`.
+- Set `sender_wallet = null` (no transaction found).
 
 Proceed to Step 7.
 
@@ -188,7 +214,7 @@ Evaluate the following rules **in order**, applying the first matching rule:
 |---|---|---|
 | `status = "check_failed"` | `"no_change"` | No Discord role change. Post an error notice to Subscribe_Channel via proxy: `⚠️ Payment check failed for @{discord_username}. Failed at: {ISO 8601 UTC timestamp of failure}. Manual review required.` Then return. |
 | `role_check_failed = true` | `"no_change"` | Discord role check failed; no change. Return. |
-| `status = "active"` AND `subscriber_has_role = false` | `"grant_role"` | Execute PUT to grant Subscriber_Role via Discord API through proxy. Record grant timestamp in Subscriber_Record. |
+| `status = "active"` AND `subscriber_has_role = false` | `"grant_role"` | Execute role grant via proxy using ?method=PUT. Record grant timestamp in Subscriber_Record. |
 | `status = "active"` AND `subscriber_has_role = true` | `"no_change"` | Subscriber already has role; nothing to do. |
 | `status = "grace"` | `"no_change"` | Retain role during grace window. |
 | `status = "lapsed"` AND `subscriber_has_role = true` | `"propose_removal"` | Post removal proposal to Subscribe_Channel via proxy. |
@@ -197,15 +223,11 @@ Evaluate the following rules **in order**, applying the first matching rule:
 | `status = "expired"` AND `subscriber_has_role = false` | `"no_change"` | Nothing to do. |
 
 ### Grant Role (when `role_action = "grant_role"`)
-Execute:
+Execute via the `http_request` tool:
 ```
-PUT https://discord.com/api/v10/guilds/1531347878906302484/members/{discord_user_id}/roles/1531669950819733575
+{"name": "http_request", "arguments": {"url": "https://solana-rpc-proxy.dharadarsh0.workers.dev/discord/guilds/1531347878906302484/members/{discord_user_id}/roles/1531669950819733575?method=PUT", "method": "GET"}}
 ```
-via the proxy:
-```
-GET https://solana-rpc-proxy.dharadarsh0.workers.dev/discord/guilds/1531347878906302484/members/{discord_user_id}/roles/1531669950819733575
-```
-(Use the proxy's Discord role-grant passthrough with the appropriate method if available, or use the proxy's `/discord/message` workaround for PUT if needed per the runtime constraints.)
+The proxy requires `?method=PUT` as a query parameter to specify the HTTP method for the Discord API call, but the http_request tool should call it with method="GET".
 
 After a successful grant, record the grant timestamp in the Subscriber_Record by setting a `role_granted_at` field to the current ISO 8601 UTC timestamp (e.g., `"2026-07-29T12:00:00.000Z"`). This persists into Memory_Store when the SOP updates the record after the skill returns.
 
@@ -229,7 +251,8 @@ After completing all steps, return the following JSON object:
   "status": "<active|lapsed|check_failed>",
   "role_action": "<grant_role|propose_removal|no_change>",
   "expires_at": "<ISO 8601 UTC string or null>",
-  "highest_amount_sol_seen": "<float with 9 decimal places or null>"
+  "highest_amount_sol_seen": "<float with 9 decimal places or null>",
+  "sender_wallet": "<base58 wallet address or null>"
 }
 ```
 
@@ -241,13 +264,14 @@ After completing all steps, return the following JSON object:
 | `role_action` | Action taken (or proposed) for the Discord role. One of: `grant_role`, `propose_removal`, `no_change`. |
 | `expires_at` | ISO 8601 UTC string of subscription expiry (`blockTime + period_days × 86400`), or `null` if payment was not confirmed. |
 | `highest_amount_sol_seen` | Highest SOL amount observed in any SOL transfer to the Merchant Wallet, expressed as a float with 9 decimal places (e.g. `0.001500000`). `null` if no SOL transfers were found. |
+| `sender_wallet` | The wallet address that sent the qualifying payment transaction, or `null` if no qualifying transaction was found. |
 
 ## Error Summary
 
 | Failure | Response |
 |---|---|
-| `expected_amount_sol` absent, null, or non-numeric | Return `{status: "check_failed", role_action: "no_change", expires_at: null, highest_amount_sol_seen: null}` immediately; log config error. |
-| `getSignaturesForAddress` proxy error (non-2xx, timeout, bad JSON) | Return `{status: "check_failed", role_action: "no_change", expires_at: null, highest_amount_sol_seen: null}` immediately. |
+| `expected_amount_sol` absent, null, or non-numeric | Return `{status: "check_failed", role_action: "no_change", expires_at: null, highest_amount_sol_seen: null, sender_wallet: null}` immediately; log config error. |
+| `getSignaturesForAddress` proxy error (non-2xx, timeout, bad JSON) | Return `{status: "check_failed", role_action: "no_change", expires_at: null, highest_amount_sol_seen: null, sender_wallet: null}` immediately. |
 | `getTransaction` error for a specific signature | Mark that signature as failed; continue processing remaining signatures. |
 | Discord role check returns non-2xx | Set `role_check_failed = true`; apply `role_action = "no_change"`. |
 | Discord role grant returns non-2xx | Set `status = "check_failed"` for this cycle; retain existing role; post error notice to Subscribe_Channel. |

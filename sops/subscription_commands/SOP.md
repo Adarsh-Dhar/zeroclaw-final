@@ -1,8 +1,51 @@
-# Subscription Commands — Subscribe Command Detection and Processing
+# Subscription Commands — DEPRECATED
 
-Triggered every 5 minutes by the cron scheduler. Polls the Signup_Channel for recent messages from registered users, detects standalone `subscribe` commands, and invokes the Onboarding SKILL for each qualifying message.
+**This SOP is deprecated.** Its functionality has been merged into the `onboarding_check` SOP, which now handles both wallet registration (WALLET_VERIFIED messages) and subscribe command detection.
+
+This file is retained for reference only and should not be used in production.
 
 **Tools allowed:** `http_request`, Memory_Store (memory recall/store). All external API calls route through the Proxy.
+
+---
+
+## Tool Call Format (Critical — Follow Exactly)
+
+When calling `memory_store` or `memory_recall`, you MUST use the correct parameter format:
+
+**For memory_store:**
+```json
+{"name": "memory_store", "arguments": {"key": "subscriber:123456", "content": "{\"discord_user_id\": \"123456\", ...}", "category": "subscribers"}}
+```
+- `key`: string (required) - the memory key
+- `content`: string (required) - the content to store (must be a string, use JSON.stringify for objects)
+- `category`: string (optional) - category for organization
+
+**For memory_recall:**
+```json
+{"name": "memory_recall", "arguments": {"query": "subscriber:123456", "strategy": "bm25", "limit": 1}}
+```
+- `query`: string (required) - the search query or key
+- `strategy`: string (optional) - search strategy (e.g., "bm25")
+- `limit`: number (optional) - maximum results to return
+
+**INCORRECT (will fail):**
+```json
+{"name": "memory_store", "key": "subscriber:123456", "content": "{\"discord_user_id\": \"123456\", ...}"}
+```
+
+**For http_request:**
+```json
+{"name": "http_request", "arguments": {"url": "https://example.com", "method": "GET"}}
+```
+- `url`: string (required) - the request URL
+- `method`: string (optional) - HTTP method (default: "GET")
+- `headers`: object (optional) - request headers
+- `body`: string (optional) - request body
+
+**INCORRECT (will fail):**
+```json
+{"name": "http_request", "url": "https://example.com", "method": "GET"}
+```
 
 ---
 ## Trigger

@@ -20,8 +20,55 @@ proxy_base_url = "https://solana-rpc-proxy.dharadarsh0.workers.dev"
 merchant_wallet = "pt6Ws1FMbdrLbUZqKooediS8mu6SNvDJodzXUx6ypak"
 discord_guild = "1531347878906302484"
 subscriber_role = "1531669950819733575"
-subscription_channel = "1532423195884261377"
+subscription_channel = "1531347878906302487"
 wallet_mapping_path = "~/.zeroclaw/wallet_mapping.json"
+```
+
+---
+
+## Tool Call Format (Critical — Follow Exactly)
+
+When calling `memory_store` or `memory_recall`, you MUST use the correct parameter format:
+
+**For memory_store:**
+- `key`: string (required) - the memory key
+- `content`: string (required) - the content to store (MUST be a JSON string with escaped quotes, not a JSON object)
+- `category`: string (optional) - category for organization
+
+**CRITICAL - content must be a JSON string:**
+✅ CORRECT: `"content": "{\"discord_user_id\":\"123456\"}"`
+❌ WRONG: `"content": {"discord_user_id":"123456"}` (this will fail)
+
+**Example call:**
+```json
+{"name": "memory_store", "arguments": {"key": "subscriber:123456", "content": "{\"discord_user_id\":\"123456\",\"tier\":\"standard\"}", "category": "subscribers"}}
+```
+
+**For memory_recall:**
+```json
+{"name": "memory_recall", "arguments": {"query": "subscriber:123456", "strategy": "bm25", "limit": 1}}
+```
+- `query`: string (required) - the search query or key
+- `strategy`: string (optional) - search strategy (e.g., "bm25")
+- `limit`: number (optional) - maximum results to return
+
+**INCORRECT (will fail):**
+```json
+{"name": "memory_store", "key": "subscriber:123456", "content": "{\"discord_user_id\": \"123456\", ...}"}
+```
+
+**For http_request:**
+```json
+{"name": "http_request", "arguments": {"url": "https://example.com", "method": "GET"}}
+```
+- `url`: string (required) - the request URL
+- `method`: string (optional) - HTTP method (default: "GET")
+- `headers`: object (optional) - request headers
+- `body`: string (optional) - request body
+
+**INCORRECT (will fail):**
+```json
+{"name": "http_request", "url": "https://example.com", "method": "GET"}
 ```
 
 ---
@@ -40,11 +87,23 @@ wallet_mapping_path = "~/.zeroclaw/wallet_mapping.json"
    - If the key is found and parses successfully: set `subscriber_ids = <parsed array>`. If the array is empty, proceed to migration. Otherwise skip migration and proceed to loading individual records.
 
    **On Memory_Store tool error** (the recall tool itself returns an error, not just an empty result):
-   Post an operator alert to Subscription_Channel:
+   1. Log the specific error details including timestamp and error message to Memory_Store under key `"error:memory_unavailable:<current_UTC_timestamp_ISO8601>"` with content:
+      ```json
+      {
+        "event": "memory_store_unavailable",
+        "step": "load_subscriber_records",
+        "sop": "subscription_check",
+        "timestamp": "<ISO 8601 UTC>",
+        "error_details": "<specific error message if available>"
+      }
+      ```
+
+   2. Post an operator alert to Subscription_Channel:
    ```
    GET {proxy_base_url}/discord/message?channel_id={subscription_channel}&content=<URL-encoded: "⚠️ OPERATOR ALERT: Memory_Store unavailable at subscription check cycle start. No role changes made.">
    ```
-   Then terminate the cycle immediately. Do NOT process any subscribers or modify any Discord roles.
+
+   3. Then terminate the cycle immediately. Do NOT process any subscribers or modify any Discord roles.
 
    **Empty Index: Attempt One-Time Migration:**
    If `subscriber_ids` is empty (index not found or empty array), try to read `wallet_mapping.json` using the `read_file` tool at path `{wallet_mapping_path}`.
@@ -100,23 +159,28 @@ wallet_mapping_path = "~/.zeroclaw/wallet_mapping.json"
    - Send the renewal DM via `GET {proxy_base_url}/discord/dm?user_id={record.discord_user_id}&content=<URL-encoded renewal message>`. On proxy failure: retain `status = "pending_payment"`, log the failure, and proceed to payment check.
 
    **Invoke check-payment SKILL:**
-   Call the `check-payment` SKILL, passing the current `record` as the full context input. The SKILL returns status, role_action, expires_at, and highest_amount_sol_seen.
+   Call the `check-payment` SKILL, passing the current `record` as the full context input. The SKILL returns status, role_action, expires_at, highest_amount_sol_seen, and sender_wallet.
    Update the in-memory `record` based on the SKILL result:
    - Update `record.status` from the SKILL result `status` field.
    - If the SKILL returns a non-null `expires_at`, update `record.expires_at` to that value.
    - If the SKILL returns `status = "active"`, set `record.grace_started_at = null`.
    - If the SKILL returns `status = "check_failed"`, set `record.last_known_status = record.status` (the prior status value before overwriting), then set `record.status = "check_failed"`.
+   - If the SKILL returns a non-null `sender_wallet` and `record.wallet_address` is null, update `record.wallet_address` to the returned `sender_wallet`. This captures the wallet address from successful payments for users who didn't complete registration.
 
    **Grace Period Logic:**
    Apply the following logic based on `record.status` after payment check. If `record.status` is `"active"`, `"check_failed"`, or `"pending_payment"`, skip to role action.
-   - **Newly lapsed (grace_started_at is null):** Condition: `record.status == "lapsed"` AND `record.grace_started_at == null`. Actions: Set `record.grace_started_at = current_time_iso`, persist the updated record to Memory_Store, set `effective_status = "grace"` for this cycle, build a grace renewal Solana Pay URL using `record.reference_key`, compute `grace_expiry_iso` = ISO 8601 UTC of `(current_time + grace_period_days * 86400)` seconds, post a grace reminder to Subscribe_Channel. On proxy failure: retry once after 2 seconds; if the second attempt also fails: log the failure and continue.
+   - **Newly lapsed (grace_started_at is null):** Condition: `record.status == "lapsed"` AND `record.grace_started_at == null`. Actions: Set `record.grace_started_at = current_time_iso`, persist the updated record to Memory_Store, set `effective_status = "grace"` for this cycle, build a grace renewal Solana Pay URL using `record.reference_key`, compute `grace_expiry_iso` = ISO 8601 UTC of `(current_time + grace_period_days * 86400)` seconds, post a grace reminder to Subscribe_Channel (channel_id: {subscription_channel}). On proxy failure: retry once after 2 seconds; if the second attempt also fails: log the failure and continue.
    - **Within grace window:** Condition: `record.status == "lapsed"` AND `record.grace_started_at != null` AND `current_time - unix(record.grace_started_at) < grace_period_days * 86400`. Actions: Set `effective_status = "grace"`. No message posted (reminder already sent). Retain role.
    - **Grace period elapsed (expired):** Condition: `record.status == "lapsed"` AND `record.grace_started_at != null` AND `current_time - unix(record.grace_started_at) >= grace_period_days * 86400`. Actions: Set `effective_status = "expired"`, compute `grace_expiry_iso` = ISO 8601 UTC of `(unix(record.grace_started_at) + grace_period_days * 86400)` seconds. Do NOT post the role removal proposal here — that happens in the next step.
    - **Other statuses:** If `record.status` is `"active"`, `"check_failed"`, or `"pending_payment"`, set `effective_status = record.status`. No grace logic applies.
 
    **Discord Role Action:**
    Execute the following based on `effective_status`:
-   - **`effective_status = "active"`:** Check whether the subscriber currently holds `subscriber_role` in `discord_guild` via `GET {proxy_base_url}/discord/guilds/{discord_guild}/members/{record.discord_user_id}`. If the member does NOT have `subscriber_role` (or if the response is 404): Grant the role via `GET {proxy_base_url}/discord/guilds/{discord_guild}/members/{record.discord_user_id}/roles/{subscriber_role}`. On success: set `role_action = "granted"`. On non-2xx: set `effective_status = "check_failed"`, set `role_action = "check_failed"`, post error notice to Subscribe_Channel. If the member already has `subscriber_role`: set `role_action = "unchanged"`. On Discord API non-2xx when checking membership (not 404): set `effective_status = "check_failed"`, set `role_action = "check_failed"`, post error notice to Subscribe_Channel.
+   - **`effective_status = "active"`:** Check whether the subscriber currently holds `subscriber_role` in `discord_guild` via `GET {proxy_base_url}/discord/guilds/{discord_guild}/members/{record.discord_user_id}`. If the member does NOT have `subscriber_role` (or if the response is 404): Grant the role via `http_request` tool with the proxy format:
+     ```
+     {"name": "http_request", "arguments": {"url": "{proxy_base_url}/discord/guilds/{discord_guild}/members/{record.discord_user_id}/roles/{subscriber_role}?method=PUT", "method": "GET"}}
+     ```
+     On success: set `role_action = "granted"`. On non-2xx: set `effective_status = "check_failed"`, set `role_action = "check_failed"`, post error notice to Subscribe_Channel. If the member already has `subscriber_role`: set `role_action = "unchanged"`. On Discord API non-2xx when checking membership (not 404): set `effective_status = "check_failed"`, set `role_action = "check_failed"`, post error notice to Subscribe_Channel.
    - **`effective_status = "expired"`:** Set `role_action = "removal_proposed"`. Do NOT remove the role in this step — the proposal is posted in the next step.
    - **`effective_status = "check_failed"`:** Set `role_action = "check_failed"`. Do NOT change the subscriber's role. Post an error notice to Subscribe_Channel.
    - **`effective_status = "grace"`:** Set `role_action = "unchanged"`. Retain the subscriber's role. No role change.
@@ -144,7 +208,12 @@ wallet_mapping_path = "~/.zeroclaw/wallet_mapping.json"
    - tools: http_request
 
    For each subscriber where the role removal proposal was approved in the previous step:
-   - Remove the role via `GET {proxy_base_url}/discord/guilds/{discord_guild}/members/{record.discord_user_id}/roles/{subscriber_role}`.
+   - **CRITICAL: Remove the subscriber role immediately:**
+     - Use `http_request` with method="DELETE" and explicit URL:
+       ```
+       {"name": "http_request", "arguments": {"url": "https://solana-rpc-proxy.dharadarsh0.workers.dev/discord/guilds/1531347878906302484/members/{record.discord_user_id}/roles/1531669950819733575", "method": "DELETE"}}
+       ```
+     - This step is mandatory and must not be skipped. Note: The proxy uses the actual HTTP DELETE method (not ?method=DELETE query parameter).
    - On success: update the summary row for this subscriber to reflect `role_action = "removed"`.
    - On non-2xx: log the failure, post an error notice to Subscribe_Channel, and continue to the next subscriber. Do NOT block the entire step on a single failure.
 

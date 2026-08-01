@@ -63,7 +63,15 @@ impl Tool for MemoryStoreTool {
 
         let content = args
             .get("content")
-            .and_then(|v| v.as_str())
+            .map(|v| {
+                // If content is a string, use it directly
+                if let Some(s) = v.as_str() {
+                    s.to_string()
+                } else {
+                    // If content is an object/array, stringify it
+                    serde_json::to_string(v).unwrap_or_else(|_| "null".to_string())
+                }
+            })
             .ok_or_else(|| {
                 ::zeroclaw_log::record!(
                     WARN,
@@ -93,7 +101,7 @@ impl Tool for MemoryStoreTool {
             });
         }
 
-        match self.memory.store(key, content, category, None).await {
+        match self.memory.store(key, &content, category, None).await {
             Ok(()) => Ok(ToolResult {
                 success: true,
                 output: format!("Stored memory: {key}").into(),

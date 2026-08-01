@@ -1,6 +1,6 @@
 [sop]
 name = "subscription_commands"
-description = "Poll Subscription_Channel every 5 minutes for subscribe commands from registered users and invoke the Onboarding SKILL for each qualifying message"
+description = "DEPRECATED - Functionality merged into onboarding_check SOP. This SOP is no longer used."
 version = "1.0.0"
 max_concurrent = 1
 admission_policy = "parallel"
@@ -8,7 +8,7 @@ max_pending_approvals = 10
 dispatch_mode = "headless"
 auto_approve = true
 
-# Disabled - using onboarding_check SOP instead
+# Disabled - functionality merged into onboarding_check SOP
 # [[triggers]]
 # type = "cron"
 # expression = "*/5 * * * *"

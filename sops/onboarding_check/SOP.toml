@@ -1,13 +1,14 @@
 [sop]
 name = "onboarding_check"
-description = "Poll Signup_Channel every 5 minutes for register commands and invoke the Onboarding SKILL for each qualifying message"
+description = "Poll Signup_Channel every 5 minutes for WALLET_VERIFIED messages to handle registration, and poll Subscribe_Channel for subscribe commands to invoke the Onboarding SKILL"
 version = "1.0.0"
-max_concurrent = 1
-admission_policy = "parallel"
-max_pending_approvals = 100
-dispatch_mode = "headless"
-auto_approve = true
+max_concurrent = 5
+execution_mode = "auto"
+enabled = false
 
 [[triggers]]
 type = "cron"
-expression = "0 * * * *"
+expression = "*/5 * * * *"
+
+[[triggers]]
+type = "manual"

@@ -378,6 +378,31 @@ export default {
       return new Response(body, { status: discordRes.status });
     }
 
+    // Handle Discord guild members list
+    // Matches /discord/guilds/<guild_id>/members
+    const guildMembersMatch = url.pathname.match(/^\/discord\/guilds\/([^/]+)\/members$/);
+    if (guildMembersMatch && request.method === 'GET') {
+      const guildId = guildMembersMatch[1];
+      const after = url.searchParams.get('after');
+      const limit = url.searchParams.get('limit') || '100';
+      
+      let discordUrl = `https://discord.com/api/v10/guilds/${guildId}/members?limit=${limit}`;
+      if (after) {
+        discordUrl += `&after=${after}`;
+      }
+      
+      const discordRes = await fetch(
+        discordUrl,
+        {
+          method: 'GET',
+          headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}` },
+        }
+      );
+      
+      const body = await discordRes.text();
+      return new Response(body, { status: discordRes.status });
+    }
+
     // Handle Discord guild member lookup
     // Matches /discord/guilds/<guild_id>/members/<user_id>
     const guildMemberMatch = url.pathname.match(/^\/discord\/guilds\/([^/]+)\/members\/([^/]+)$/);
@@ -399,48 +424,39 @@ export default {
       return new Response(body, { status: discordRes.status });
     }
 
-    // Handle Discord guild member role grant
+    // Handle Discord guild member role operations (grant and remove)
     // Matches /discord/guilds/<guild_id>/members/<user_id>/roles/<role_id>
-    // Accepts GET from the proxy client but translates to PUT for the Discord API
+    // Accepts GET with ?method=PUT or ?method=DELETE query parameter, or actual PUT/DELETE method
+    // Translates to PUT or DELETE for the Discord API
     const guildMemberRoleMatch = url.pathname.match(/^\/discord\/guilds\/([^/]+)\/members\/([^/]+)\/roles\/([^/]+)$/);
-    if (guildMemberRoleMatch && request.method === 'GET') {
+    const methodOverride = url.searchParams.get('method');
+    if (guildMemberRoleMatch) {
       const guildId = guildMemberRoleMatch[1];
       const userId = guildMemberRoleMatch[2];
       const roleId = guildMemberRoleMatch[3];
 
-      const discordRes = await fetch(
-        `https://discord.com/api/v10/guilds/${guildId}/members/${userId}/roles/${roleId}`,
-        {
-          method: 'PUT',
-          headers: {
-            'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`,
-          },
-        }
-      );
+      // Determine the actual HTTP method to use
+      let discordMethod = null;
+      if (request.method === 'PUT' || (request.method === 'GET' && methodOverride === 'PUT')) {
+        discordMethod = 'PUT';
+      } else if (request.method === 'DELETE' || (request.method === 'GET' && methodOverride === 'DELETE')) {
+        discordMethod = 'DELETE';
+      }
 
-      const body = await discordRes.text();
-      return new Response(body, { status: discordRes.status });
-    }
+      if (discordMethod) {
+        const discordRes = await fetch(
+          `https://discord.com/api/v10/guilds/${guildId}/members/${userId}/roles/${roleId}`,
+          {
+            method: discordMethod,
+            headers: {
+              'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`,
+            },
+          }
+        );
 
-    // Handle Discord guild member role removal
-    // Matches /discord/guilds/<guild_id>/members/<user_id>/roles/<role_id>
-    // Accepts GET from the proxy client but translates to DELETE for the Discord API
-    if (guildMemberRoleMatch && request.method === 'DELETE') {
-      const guildId = guildMemberRoleMatch[1];
-      const userId = guildMemberRoleMatch[2];
-      const roleId = guildMemberRoleMatch[3];
-
-      const discordRes = await fetch(
-        `https://discord.com/api/v10/guilds/${guildId}/members/${userId}/roles/${roleId}`,
-        {
-          method: 'DELETE',
-          headers: {
-            'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`,
-          },
-        }
-      );
-
-      return new Response(null, { status: discordRes.status });
+        const body = await discordRes.text();
+        return new Response(body, { status: discordRes.status });
+      }
     }
 
     // Handle Discord message posting

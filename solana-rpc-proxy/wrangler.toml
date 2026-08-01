@@ -4,13 +4,9 @@ compatibility_date = "2024-01-01"
 
 [vars]
 PROXY_BASE_URL = "https://solana-rpc-proxy.dharadarsh0.workers.dev"
-# All other secrets are injected via `wrangler secret put` and accessed through the `env` binding:
-#
-#   wrangler secret put HELIUS_API_KEY
-#   wrangler secret put DISCORD_BOT_TOKEN
-#   wrangler secret put DISCORD_GUILD_ID
-#   wrangler secret put REGISTERED_ROLE_ID
-#   wrangler secret put SIGNUP_CHANNEL_ID
-#   wrangler secret put SUBSCRIPTION_CHANNEL_ID
-#
-# Never add secret values directly to this file.
+DISCORD_GUILD_ID = "1531347878906302484"
+REGISTERED_ROLE_ID = "1531669950819733575"
+SIGNUP_CHANNEL_ID = "1532423294354063410"
+SUBSCRIPTION_CHANNEL_ID = "1531347878906302487"
+
+# DISCORD_BOT_TOKEN is set via wrangler secret
