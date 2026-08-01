@@ -172,15 +172,20 @@ Onboarding_SKILL     = shared/skills/default/onboarding/SKILL.md
    **Check for Standalone `delete my subscription` Command:**
    Test the message `content` field against the case-insensitive regex `\bdelete my subscription\b`.
    - If the regex matches: this is a delete subscription command. Handle deletion by:
-     * Use `memory_recall` with `query="subscriber:{message.author.id}"`, `strategy="bm25"`, `limit=1` to get the subscriber record.
+     * Call the Worker storage endpoint to get the subscriber record:
+       ```
+       {"name": "http_request", "arguments": {"url": "https://solana-rpc-proxy.dharadarsh0.workers.dev/storage/subscriber/{discord_user_id}", "method": "GET"}}
+       ```
      * If record exists and status is "active" or "pending_payment":
-       - Update the record: set status to "lapsed", keep all other fields unchanged.
-       - Persist the updated record using `memory_store` with key="subscriber:{discord_user_id}", content=updated_record (as JSON string with escaped quotes), category="subscribers". Follow the same format as in Step 1.
        - **Immediately remove the subscriber role using http_request:**
          ```
          {"name": "http_request", "arguments": {"url": "https://solana-rpc-proxy.dharadarsh0.workers.dev/discord/guilds/1531347878906302484/members/{discord_user_id}/roles/1531669950819733575?method=DELETE", "method": "GET"}}
          ```
          The proxy translates the `?method=DELETE` query parameter to a DELETE request to the Discord API.
+       - **Delete the subscriber record from Worker storage:**
+         ```
+         {"name": "http_request", "arguments": {"url": "https://solana-rpc-proxy.dharadarsh0.workers.dev/storage/subscriber/{discord_user_id}?method=DELETE", "method": "GET"}}
+         ```
        - Post confirmation message to Subscribe_Channel: `<@{discord_user_id}> — Your subscription has been cancelled and your subscriber role has been removed.`
      * If record does not exist or status is already "lapsed"/"expired": 
        - Post message: `<@{discord_user_id}> — You do not have an active subscription to cancel.`
