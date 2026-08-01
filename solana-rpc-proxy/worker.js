@@ -885,6 +885,14 @@ export default {
             headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
           });
         }
+        
+        if (effectiveMethod === 'DELETE') {
+          // Delete subscriber record
+          await env.SUBSCRIBERS.delete(`subscriber:${userId}`);
+          return new Response('{"success":true}', {
+            headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+          });
+        }
       }
       
       if (pathParts[0] === 'storage' && pathParts[1] === 'subscriber_index') {
