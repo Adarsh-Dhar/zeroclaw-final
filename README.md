@@ -169,17 +169,18 @@ zeroclaw cron list
 5. **Amount Validation:** Verifies payment amount meets tier requirements
 6. **Subscription Window:** Checks payment within configured period (default 30 days)
 
-### Instant payment via Blinks
+### Instant payment via Self-Hosted Payment Page
 
-Alongside the Solana Pay URL/QR, onboarding now also posts a **Blink**
-(`dial.to/?action=solana-action:...`) pointing at two new Worker routes:
+Alongside the Solana Pay URL/QR, onboarding now also posts a link to a
+self-hosted payment page (`/pay?tier=...&discord_user_id=...&reference=...`)
+served directly by the Worker. This page:
 
-- `GET /actions/subscribe` — returns Action preview metadata (title,
-  description, price) per the Solana Actions spec.
-- `POST /actions/subscribe` — takes `{ "account": "<payer pubkey>" }` and
-  returns an **unsigned** transaction (SOL transfer to the fixed merchant
-  wallet + reference key + memo). The Worker never sees or requests a
-  private key; the subscriber's wallet signs locally.
+- Renders a "Connect & Pay" button that works with Phantom wallet
+- Calls the Worker's own `/actions/subscribe` endpoint to get an unsigned
+  transaction (SOL transfer to the fixed merchant wallet + reference key + memo)
+- Signs and broadcasts the transaction directly from the user's wallet
+- The Worker never sees or requests a private key; the subscriber's wallet
+  signs locally
 
 After posting the payment message, the onboarding skill runs a bounded
 poll (~15 rounds, 20s apart) against `getSignaturesForAddress` on the

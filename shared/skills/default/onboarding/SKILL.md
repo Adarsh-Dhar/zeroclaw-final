@@ -86,10 +86,10 @@ GET <Proxy_Base_URL>/storage/subscriber/<discord_user_id>
 **If a record is found (response is JSON):**
 - Parse the response as the subscriber record.
 - Check the `status` field:
-  - If `status = "pending_payment"`: The subscriber already has a pending invoice. Re-use the existing `solana_pay_url` and QR URL stored in the record. Post to Subscribe_Channel via the Proxy using Discord's mention format:
+  - If `status = "pending_payment"`: The subscriber already has a pending invoice. Re-use the existing payment link. If the record contains a `pay_url` field, use it directly. Otherwise, construct the pay page URL from the stored reference key and tier. Also construct the Solana Pay URL from the stored reference key. Post to Subscribe_Channel via the Proxy using Discord's mention format:
     ```
-    <@<discord_user_id>> — You already have a pending payment. Pay here: <solana_pay_url from record>
-    QR: https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=<URL-encoded solana_pay_url from record>
+    <@<discord_user_id>> — You already have a pending payment. Pay here: <pay_url from record, or construct as <Proxy_Base_URL>/pay?tier=<tier from record>&discord_user_id=<discord_user_id>&reference=<reference_key from record>>
+    🔗 Or pay manually with Solana Pay: solana:<Merchant_Wallet>?amount=<expected_amount_sol from record>&reference=<reference_key from record>&label=ZeroClaw+Subscription&memo=<discord_user_id>&cluster=devnet
     ```
     **STOP. Do not continue to Step 2.**
   - If `status = "active"`: Allow the user to re-subscribe for renewal. Proceed to Step 2 to generate a new payment link for renewal (will update existing record). Additionally, ensure the user has the subscriber role by calling the grant-subscriber-role skill. If the role grant fails, log the error but continue with renewal flow.
@@ -181,7 +181,8 @@ Build the subscriber record as a JSON object:
   "reference_key": "<reference_key>",
   "status": "pending_payment",
   "last_known_status": null,
-  "renewal_dm_sent_for_expiry": null
+  "renewal_dm_sent_for_expiry": null,
+  "pay_url": "<Proxy_Base_URL>/pay?tier=<tier>&discord_user_id=<discord_user_id>&reference=<reference_key>"
 }
 ```
 
@@ -202,8 +203,7 @@ Content-Type: application/json
 - Log the specific error for debugging (if possible, include the error message in a Discord message to an admin channel).
 - Attempt fallback: Post the payment link directly to the user and inform them that the record will be created when the service recovers:
   ```
-  <@<discord_user_id>> — Service temporarily unavailable. Your payment link is: <solana_pay_url>. Please save this link and try the subscribe command again later if payment verification fails.
-  QR: <qr_url>
+  <@<discord_user_id>> — Service temporarily unavailable. Your payment link is: <pay_url>. Please save this link and try the subscribe command again later if payment verification fails.
   ```
 - Discard the `reference_key` obtained in Step 4 — it must not be reused.
 - **STOP. Do not proceed to Discord message posting.**
@@ -266,18 +266,15 @@ Continue to Step 7.
 
 ---
 
-## Step 7: Construct Blink URL
+## Step 7: Construct Pay Page URL
 
-Build the Action endpoint URL, then wrap it in the dial.to interstitial so
-Actions-aware wallets recognize and render it as a tappable Blink:
+Build the self-hosted payment page URL. This page is served directly by the Proxy, so there is no third-party dependency in this step at all:
 
 ```
-action_url = <Proxy_Base_URL>/actions/subscribe?tier=<tier>&discord_user_id=<discord_user_id>&reference=<reference_key>
-blink_url  = https://dial.to/?action=solana-action: + URL-encode(action_url) + "&cluster=devnet"
+pay_url = <Proxy_Base_URL>/pay?tier=<tier>&discord_user_id=<discord_user_id>&reference=<reference_key>
 ```
 
-Store as `blink_url`. This costs one extra query-string field; no new
-network call is required at this step.
+Store as `pay_url`. No network call is required at this step — it's a plain URL construction, same as Step 6.
 
 Continue to Step 8.
 
@@ -289,8 +286,8 @@ Construct the message using Discord's proper mention format with the user ID:
 
 ```
 <@<discord_user_id>> — ZeroClaw <tier> subscription (<expected_amount_sol> SOL / <period_days> days)
-⚡ Tap to pay: <blink_url>
-🔗 Or pay manually: <solana_pay_url>
+⚡ Tap to pay: <pay_url>
+🔗 Or pay manually with Solana Pay: <solana_pay_url>
 ```
 
 Use Discord's mention format `<@<discord_user_id>>` (not @username) to ensure proper user tagging regardless of their username format.
@@ -311,7 +308,7 @@ GET https://solana-rpc-proxy.dharadarsh0.workers.dev/discord/message?channel_id=
     "discord_user_id": "<discord_user_id>",
     "discord_username": "<discord_username>",
     "tier": "<tier>",
-    "solana_pay_url": "<solana_pay_url>",
+    "pay_url": "<pay_url>",
     "timestamp": "<current_UTC_timestamp_ISO8601>",
     "error": "Discord message post failed"
   }

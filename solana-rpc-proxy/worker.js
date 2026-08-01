@@ -237,9 +237,84 @@ async function buildSubscribeTransaction({
   return serialized.toString('base64');
 }
 
+function buildPayPage({ tier, discordUserId, reference, proxyBaseUrl, cfg }) {
+  const actionGetUrl = `${proxyBaseUrl}/actions/subscribe?tier=${encodeURIComponent(tier)}&discord_user_id=${encodeURIComponent(discordUserId)}&reference=${encodeURIComponent(reference)}`;
+  return `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>ZeroClaw — Pay ${cfg.amountSol} SOL</title>
+<script src="https://unpkg.com/@solana/web3.js@1.98.0/lib/index.iife.min.js"></script>
+<style>body{font-family:system-ui;max-width:480px;margin:60px auto;padding:0 20px;text-align:center}
+button{padding:12px 24px;font-size:16px;border-radius:8px;border:none;background:#512da8;color:#fff;cursor:pointer;margin-top:20px}
+button:disabled{background:#999;cursor:default}
+#status{margin-top:20px;color:#555;word-break:break-all}
+.price{font-size:28px;font-weight:600;margin:12px 0}</style></head>
+<body>
+<h2>ZeroClaw ${tier} subscription</h2>
+<div class="price">${cfg.amountSol} SOL / ${cfg.periodDays} days</div>
+<p>Signing pays the merchant wallet directly from your own wallet. ZeroClaw never holds your keys or your funds.</p>
+<button id="connect">Connect &amp; Pay</button>
+<div id="status"></div>
+<script>
+const actionGetUrl = ${JSON.stringify(actionGetUrl)};
+document.getElementById('connect').onclick = async () => {
+  const btn = document.getElementById('connect');
+  const statusEl = document.getElementById('status');
+  btn.disabled = true;
+  try {
+    if (!window.solana || !window.solana.isPhantom) {
+      statusEl.textContent = 'Phantom wallet not found. Install it and reload this page.';
+      btn.disabled = false;
+      return;
+    }
+    statusEl.textContent = 'Connecting wallet...';
+    const resp = await window.solana.connect();
+    const account = resp.publicKey.toString();
+
+    statusEl.textContent = 'Requesting transaction...';
+    const postResp = await fetch(actionGetUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ account }),
+    });
+    const postResult = await postResp.json();
+    if (!postResp.ok || !postResult.transaction) {
+      statusEl.textContent = 'Error building transaction: ' + (postResult.error || 'unknown error');
+      btn.disabled = false;
+      return;
+    }
+
+    const txBytes = Uint8Array.from(atob(postResult.transaction), c => c.charCodeAt(0));
+    const transaction = solanaWeb3.Transaction.from(txBytes);
+
+    statusEl.textContent = 'Please approve in your wallet...';
+    let signature;
+    if (window.solana.signAndSendTransaction) {
+      const sendResult = await window.solana.signAndSendTransaction(transaction);
+      signature = sendResult.signature;
+    } else {
+      const signed = await window.solana.signTransaction(transaction);
+      const connection = new solanaWeb3.Connection('https://api.devnet.solana.com', 'confirmed');
+      signature = await connection.sendRawTransaction(signed.serialize());
+    }
+
+    statusEl.innerHTML = '✅ Payment sent! Tx: <a href="https://explorer.solana.com/tx/' + signature + '?cluster=devnet" target="_blank">' + signature + '</a><br>Return to Discord — your subscription will confirm shortly.';
+  } catch (e) {
+    statusEl.textContent = 'Error: ' + e.message;
+    btn.disabled = false;
+  }
+};
+</script>
+</body></html>`;
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
+    // Declared once, up top: several route handlers below (including the
+    // /storage/* block) read this before the old single-use-site further
+    // down in the file used to declare it, which caused a
+    // "Cannot access 'method' before initialization" crash on every
+    // /storage/* request. Keep this the single source of truth for `method`.
+    const method = url.searchParams.get('method');
 
     // Handle reference key generation
     if (url.pathname === '/keygen') {
@@ -252,12 +327,39 @@ export default {
       });
     }
 
+    // Self-hosted payment page — serves a connect-and-pay UI directly.
+    // GET /pay?tier=...&discord_user_id=...&reference=...
+    // Renders a connect-and-pay button that calls our own /actions/subscribe
+    // GET+POST routes directly. No third-party service in this path at all.
+    if (url.pathname === '/pay' && request.method === 'GET') {
+      const tier = (url.searchParams.get('tier') || 'standard').toLowerCase();
+      const discordUserId = url.searchParams.get('discord_user_id');
+      const reference = url.searchParams.get('reference');
+      const cfg = TIER_CONFIG[tier];
+
+      if (!cfg) {
+        return new Response(`Unknown tier "${tier}"`, { status: 400 });
+      }
+      if (!discordUserId || !reference) {
+        return new Response('Missing discord_user_id or reference', { status: 400 });
+      }
+
+      const html = buildPayPage({
+        tier,
+        discordUserId,
+        reference,
+        proxyBaseUrl: env.PROXY_BASE_URL,
+        cfg,
+      });
+      return new Response(html, { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+    }
+
     // Actions/Blinks: preflight
     if (url.pathname.startsWith('/actions') && request.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: ACTIONS_CORS_HEADERS });
     }
 
-    // actions.json — required so Actions-aware clients (dial.to, wallets)
+    // actions.json — required so Actions-aware clients (wallets)
     // trust this origin as a registered Action provider.
     if (url.pathname === '/actions.json') {
       return actionsJson({
@@ -653,7 +755,7 @@ export default {
       // Handle ZeroClaw http_request tool's POST-body workaround
       // The tool uses GET with method=PUT in query string and body URL-encoded
       const methodOverride = url.searchParams.get('method');
-      const effectiveMethod = methodOverride ? methodOverride : method;
+      const effectiveMethod = methodOverride ? methodOverride : request.method;
       const bodyParam = url.searchParams.get('body');
       const requestBody = bodyParam ? decodeURIComponent(bodyParam) : await request.text();
       
@@ -713,8 +815,8 @@ export default {
       return new Response('Method not allowed', { status: 405 });
     }
     
-    // Extract RPC parameters from query string
-    const method = url.searchParams.get('method');
+    // Extract RPC parameters from query string (`method` is declared once
+    // at the top of fetch() and reused here)
     const wallet = url.searchParams.get('wallet');
     const signature = url.searchParams.get('signature');
     const encoding = url.searchParams.get('encoding') || 'jsonParsed';
