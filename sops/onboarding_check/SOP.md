@@ -126,7 +126,8 @@ Onboarding_SKILL     = shared/skills/default/onboarding/SKILL.md
          "reference_key": null,
          "status": "registered",
          "last_known_status": null,
-         "renewal_dm_sent_for_expiry": null
+         "renewal_dm_sent_for_expiry": null,
+         "pay_url": null
        }
        ```
      - Store the record under key `"subscriber:<discord_user_id>"` using `memory_store`.
@@ -189,7 +190,12 @@ Onboarding_SKILL     = shared/skills/default/onboarding/SKILL.md
    Use `memory_recall` with `query="subscriber:{message.author.id}"`, `strategy="bm25"`, `limit=1`.
    - If no record exists: proceed to tier extraction (allow new subscriptions without prior registration).
    - If record exists and record.status == "registered": proceed to tier extraction.
-   - If record exists and record.status == "pending_payment": skip this message (user already has a pending payment).
+   - If record exists and record.status == "pending_payment":
+     * Extract the tier, reference_key, and expected_amount_sol from the record.
+     * Construct the pay page URL: `https://solana-rpc-proxy.dharadarsh0.workers.dev/pay?tier={tier}&discord_user_id={message.author.id}&reference={reference_key}`
+     * Construct the Solana Pay URL: `solana:pt6Ws1FMbdrLbUZqKooediS8mu6SNvDJodzXUx6ypak?amount={expected_amount_sol}&reference={reference_key}&label=ZeroClaw+Subscription&memo={message.author.id}&cluster=devnet`
+     * Post to Subscribe_Channel: `<@{message.author.id}> — You already have a pending payment. Pay here: {pay_url} 🔗 Or pay manually with Solana Pay: {solana_pay_url}`
+     * Skip this message (do not invoke the skill).
    - If record exists and record.status == "active": proceed to tier extraction (allow renewals).
 
    **Extract Subscription Tier:**
