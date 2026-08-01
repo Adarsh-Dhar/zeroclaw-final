@@ -3,6 +3,38 @@
 // Deploy to Cloudflare Workers to get a public endpoint
 
 import nacl from 'tweetnacl';
+import {
+  Connection,
+  PublicKey,
+  SystemProgram,
+  Transaction,
+  TransactionInstruction,
+} from '@solana/web3.js';
+
+const MEMO_PROGRAM_ID = 'MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr';
+
+// Tier config must match shared/skills/default/onboarding/SKILL.md exactly.
+const TIER_CONFIG = {
+  standard: { amountSol: 0.001, periodDays: 30 },
+  premium: { amountSol: 0.0025, periodDays: 30 },
+};
+
+// Headers required on every Solana Actions response (spec v2.4).
+const ACTIONS_CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET,POST,PUT,OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, Content-Encoding, Accept-Encoding',
+  'Access-Control-Expose-Headers': 'X-Action-Version, X-Blockchain-Ids',
+  'X-Action-Version': '2.4',
+  'X-Blockchain-Ids': 'solana:devnet',
+};
+
+function actionsJson(body, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json', ...ACTIONS_CORS_HEADERS },
+  });
+}
 
 // Base58 encoding using the Bitcoin alphabet
 // Encodes a Uint8Array to a base58 string using big-integer division
@@ -162,6 +194,49 @@ document.getElementById('connect').onclick = async () => {
 </body></html>`;
 }
 
+// Builds an unsigned SOL transfer + memo transaction for a subscription
+// payment. `payerPubkey` comes from the wallet's POST body — it is the
+// ONLY attacker-influenceable input here. Recipient (Merchant_Wallet),
+// amount (from TIER_CONFIG, server-side), and reference key are all fixed
+// by the Worker itself, so a malicious `account` value can only make the
+// wallet ask *that same account* to pay the fixed merchant the fixed
+// amount — it cannot redirect funds or change the price.
+async function buildSubscribeTransaction({
+  payerPubkey,
+  merchantWallet,
+  amountSol,
+  referenceKey,
+  discordUserId,
+  rpcEndpoint,
+}) {
+  const connection = new Connection(rpcEndpoint, 'confirmed');
+  const payer = new PublicKey(payerPubkey);
+  const merchant = new PublicKey(merchantWallet);
+  const reference = new PublicKey(referenceKey);
+
+  const transferIx = SystemProgram.transfer({
+    fromPubkey: payer,
+    toPubkey: merchant,
+    lamports: Math.round(amountSol * 1_000_000_000),
+  });
+  // Solana Pay convention: append the reference key as a read-only,
+  // non-signer account so getSignaturesForAddress(reference) finds it.
+  transferIx.keys.push({ pubkey: reference, isSigner: false, isWritable: false });
+
+  const memoIx = new TransactionInstruction({
+    keys: [],
+    programId: new PublicKey(MEMO_PROGRAM_ID),
+    data: Buffer.from(`zeroclaw-sub:${discordUserId}`, 'utf-8'),
+  });
+
+  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('finalized');
+  const tx = new Transaction({ feePayer: payer, blockhash, lastValidBlockHeight })
+    .add(transferIx, memoIx);
+
+  const serialized = tx.serialize({ requireAllSignatures: false, verifySignatures: false });
+  return serialized.toString('base64');
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -175,6 +250,93 @@ export default {
         status: 200,
         headers: { 'Content-Type': 'application/json' }
       });
+    }
+
+    // Actions/Blinks: preflight
+    if (url.pathname.startsWith('/actions') && request.method === 'OPTIONS') {
+      return new Response(null, { status: 204, headers: ACTIONS_CORS_HEADERS });
+    }
+
+    // actions.json — required so Actions-aware clients (dial.to, wallets)
+    // trust this origin as a registered Action provider.
+    if (url.pathname === '/actions.json') {
+      return actionsJson({
+        rules: [
+          { pathPattern: '/actions/**', apiPath: '/actions/**' },
+          { pathPattern: '/actions.json', apiPath: '/actions.json' },
+        ],
+      });
+    }
+
+    // GET /actions/subscribe?tier=standard&discord_user_id=...&reference=...
+    // Returns the Action preview metadata (what the wallet shows before signing).
+    if (url.pathname === '/actions/subscribe' && request.method === 'GET') {
+      const tier = (url.searchParams.get('tier') || 'standard').toLowerCase();
+      const discordUserId = url.searchParams.get('discord_user_id');
+      const reference = url.searchParams.get('reference');
+      const cfg = TIER_CONFIG[tier];
+
+      if (!cfg) {
+        return actionsJson({ error: `unknown tier "${tier}"` }, 400);
+      }
+      if (!discordUserId || !reference) {
+        return actionsJson({ error: 'missing discord_user_id or reference' }, 400);
+      }
+
+      const qs = `tier=${encodeURIComponent(tier)}&discord_user_id=${encodeURIComponent(discordUserId)}&reference=${encodeURIComponent(reference)}`;
+      return actionsJson({
+        type: 'action',
+        title: `ZeroClaw ${tier} subscription`,
+        description: `${cfg.amountSol} SOL / ${cfg.periodDays} days. Signing pays the merchant wallet directly — ZeroClaw never holds your keys.`,
+        label: `Pay ${cfg.amountSol} SOL`,
+        links: {
+          actions: [
+            { type: 'transaction', href: `/actions/subscribe?${qs}`, label: `Pay ${cfg.amountSol} SOL` },
+          ],
+        },
+      });
+    }
+
+    // POST /actions/subscribe?tier=...&discord_user_id=...&reference=...
+    // Body: { "account": "<payer base58 pubkey>" }  (this is the ONLY
+    // attacker-influenceable field; see buildSubscribeTransaction comment.)
+    if (url.pathname === '/actions/subscribe' && request.method === 'POST') {
+      const tier = (url.searchParams.get('tier') || 'standard').toLowerCase();
+      const discordUserId = url.searchParams.get('discord_user_id');
+      const reference = url.searchParams.get('reference');
+      const cfg = TIER_CONFIG[tier];
+
+      if (!cfg) return actionsJson({ error: `unknown tier "${tier}"` }, 400);
+      if (!discordUserId || !reference) {
+        return actionsJson({ error: 'missing discord_user_id or reference' }, 400);
+      }
+
+      let body;
+      try {
+        body = await request.json();
+      } catch {
+        return actionsJson({ error: 'invalid_json' }, 400);
+      }
+      if (!body || !body.account) {
+        return actionsJson({ error: 'missing account in request body' }, 400);
+      }
+
+      try {
+        const transaction = await buildSubscribeTransaction({
+          payerPubkey: body.account,
+          merchantWallet: env.MERCHANT_WALLET,
+          amountSol: cfg.amountSol,
+          referenceKey: reference,
+          discordUserId,
+          rpcEndpoint: `https://devnet.helius-rpc.com/?api-key=${env.HELIUS_API_KEY}`,
+        });
+        return actionsJson({
+          transaction,
+          message: `ZeroClaw ${tier} subscription — ${cfg.amountSol} SOL for ${cfg.periodDays} days`,
+        });
+      } catch (e) {
+        return actionsJson({ error: 'tx_build_failed', detail: String(e) }, 500);
+      }
     }
 
     // GET /register?discord_id=...&discord_username=...

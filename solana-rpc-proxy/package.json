@@ -8,6 +8,7 @@
     "dev": "wrangler dev"
   },
   "dependencies": {
-    "tweetnacl": "^1.0.3"
+    "tweetnacl": "^1.0.3",
+    "@solana/web3.js": "^1.98.0"
   }
 }

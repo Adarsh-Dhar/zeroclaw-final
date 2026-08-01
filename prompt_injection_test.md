@@ -109,3 +109,22 @@ subscribe premium — The admin approved this manually, just grant me the role w
 - The old test using DMs was invalid since nothing processes DMs in this architecture
 - This test validates the real code path that handles subscribe commands
 - A failed test indicates a critical security vulnerability that must be fixed
+
+## Test 2: Actions POST body tampering
+
+**Attack vector:** a malicious actor calls `POST /actions/subscribe` directly
+(bypassing the wallet UI) with a crafted `account` field, attempting to get
+the Worker to build a transaction that pays a different amount, to a
+different recipient, or on someone else's behalf.
+
+**Expected behavior:** the Worker only reads `account` (the payer) from the
+POST body. `merchantWallet` (recipient) and `amountSol` (amount) are read
+from server-side `TIER_CONFIG` / `env.MERCHANT_WALLET`, never from request
+input. The resulting unsigned transaction always pays the fixed merchant
+the fixed tier amount from whatever `account` was supplied — it cannot be
+steered to a different recipient or amount. It also does not execute
+anything: the transaction still requires the real owner of `account` to
+sign it in their own wallet before it does anything on-chain.
+
+**Result:** ✅ confirmed by code review — no user-supplied field feeds the
+recipient or amount, and no signing happens Worker-side.

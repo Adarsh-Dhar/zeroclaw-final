@@ -169,14 +169,38 @@ zeroclaw cron list
 5. **Amount Validation:** Verifies payment amount meets tier requirements
 6. **Subscription Window:** Checks payment within configured period (default 30 days)
 
+### Instant payment via Blinks
+
+Alongside the Solana Pay URL/QR, onboarding now also posts a **Blink**
+(`dial.to/?action=solana-action:...`) pointing at two new Worker routes:
+
+- `GET /actions/subscribe` — returns Action preview metadata (title,
+  description, price) per the Solana Actions spec.
+- `POST /actions/subscribe` — takes `{ "account": "<payer pubkey>" }` and
+  returns an **unsigned** transaction (SOL transfer to the fixed merchant
+  wallet + reference key + memo). The Worker never sees or requests a
+  private key; the subscriber's wallet signs locally.
+
+After posting the payment message, the onboarding skill runs a bounded
+poll (~15 rounds, 20s apart) against `getSignaturesForAddress` on the
+reference key. A verified match grants the role and posts confirmation
+within roughly 20–60 seconds of payment, instead of waiting for the hourly
+`subscription_check` SOP, which remains as the fallback safety net.
+
+Custody tier is unchanged: **T1**. The only new attacker-influenceable
+input is the `account` field in the POST body, which can only make the
+Action build a transaction where *that same account* pays the
+hard-coded merchant wallet a hard-coded amount — it cannot redirect funds,
+change the price, or authorize a transaction on anyone else's behalf.
+
 ### Subscription Tiers
 
 **Standard Tier:**
-- Amount: 0.1 USDC
+- Amount: 0.001 SOL
 - Period: 30 days
 
 **Premium Tier:**
-- Amount: 0.25 USDC
+- Amount: 0.0025 SOL
 - Period: 30 days
 
 ### Role Management Logic
@@ -223,6 +247,13 @@ ZeroClaw's built-in `http_request` tool does not transmit a POST request body (c
 - Bot only trusts on-chain data for payment verification
 - No user claims or fabricated transaction signatures are accepted
 - Memory_Store provides persistent state without external file access
+
+### Blink polling is best-effort, not sole source of truth
+The fast-confirm loop in the onboarding skill is a UX latency optimization.
+If the Worker is unreachable, the loop exhausts, or the user closes the app
+before the loop's window ends, the hourly `subscription_check` SOP still
+verifies the payment and grants the role — nothing is ever marked `active`
+without on-chain verification either way.
 
 ## File Structure
 

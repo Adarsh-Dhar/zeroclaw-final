@@ -4,7 +4,7 @@ description = "Poll Signup_Channel every 5 minutes for WALLET_VERIFIED messages 
 version = "1.0.0"
 max_concurrent = 5
 execution_mode = "auto"
-enabled = false
+enabled = true
 
 [[triggers]]
 type = "cron"
