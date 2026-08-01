@@ -10,9 +10,5 @@ SIGNUP_CHANNEL_ID = "1532423294354063410"
 SUBSCRIPTION_CHANNEL_ID = "1531347878906302487"
 MERCHANT_WALLET = "pt6Ws1FMbdrLbUZqKooediS8mu6SNvDJodzXUx6ypak"
 
-[[kv_namespaces]]
-binding = "SUBSCRIBERS"
-id = "ed958c3462f7478c9a4a5a4115d6d0c1"
-
 # DISCORD_BOT_TOKEN is set via wrangler secret
 # HELIUS_API_KEY is set via wrangler secret
