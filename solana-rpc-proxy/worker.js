@@ -277,7 +277,7 @@ document.getElementById('connect').onclick = async () => {
     });
     const postResult = await postResp.json();
     if (!postResp.ok || !postResult.transaction) {
-      statusEl.textContent = 'Error building transaction: ' + (postResult.error || 'unknown error');
+      statusEl.textContent = 'Error building transaction: ' + (postResult.error || postResult.detail || 'unknown error');
       btn.disabled = false;
       return;
     }
@@ -298,7 +298,8 @@ document.getElementById('connect').onclick = async () => {
 
     statusEl.innerHTML = '✅ Payment sent! Tx: <a href="https://explorer.solana.com/tx/' + signature + '?cluster=devnet" target="_blank">' + signature + '</a><br>Return to Discord — your subscription will confirm shortly.';
   } catch (e) {
-    statusEl.textContent = 'Error: ' + e.message;
+    console.error('Payment error:', e);
+    statusEl.textContent = 'Error: ' + (e.message || 'Unexpected error');
     btn.disabled = false;
   }
 };
