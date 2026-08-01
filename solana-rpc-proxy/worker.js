@@ -860,7 +860,12 @@ export default {
       
       if (!bodyParam && effectiveMethod === 'PUT' && pathParts[1] === 'subscriber_index') {
         const userIds = url.searchParams.getAll('ids');
-        requestBody = JSON.stringify(userIds);
+        // Only override the body from query params if ?ids= was actually provided.
+        // Without this guard, a real JSON body sent via curl would be silently
+        // replaced with an empty array, wiping the subscriber index.
+        if (userIds.length > 0) {
+          requestBody = JSON.stringify(userIds);
+        }
       }
       
       if (pathParts[0] === 'storage' && pathParts[1] === 'subscriber') {
