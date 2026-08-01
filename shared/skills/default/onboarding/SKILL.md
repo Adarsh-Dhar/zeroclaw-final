@@ -324,72 +324,6 @@ GET https://solana-rpc-proxy.dharadarsh0.workers.dev/discord/message?channel_id=
 
 ---
 
-## Step 9: Fast-Confirmation Loop
-
-Immediately after Step 8 completes (regardless of whether the Discord post
-succeeded — this loop's job is payment detection, not messaging), run a
-bounded polling loop so the subscriber sees confirmation in seconds instead
-of waiting for the next hourly `subscription_check` run.
-
-**Tools used:** `shell` (for the delay only — `sleep 20`, a known-safe
-command), `http_request`, `memory_recall`, `memory_store`.
-
-Run up to **15 iterations**, each:
-
-1. `sleep 20` (via the shell tool).
-2. Call:
-   ```
-   GET <Proxy_Base_URL>?method=getSignaturesForAddress&wallet=<reference_key>&limit=5
-   ```
-3. If the result array is empty: continue to the next iteration.
-4. If one or more signatures are returned: for the newest signature, call
-   ```
-   GET <Proxy_Base_URL>?method=getTransaction&signature=<signature>&encoding=jsonParsed
-   ```
-   and verify **both**:
-   - a SOL transfer to `Merchant_Wallet` for at least `expected_amount_sol` 
-     appears in the parsed instructions, and
-   - the `reference_key` appears among the transaction's account keys.
-
-   **If verified:**
-   - Compute `subscribed_at = <current UTC ISO8601>` and
-     `expires_at = subscribed_at + period_days`.
-   - Update the Subscriber_Record: `status = "active"`, set
-     `subscribed_at` and `expires_at`, clear `grace_started_at`.
-   - Persist via proxy storage:
-     ```
-     PUT <Proxy_Base_URL>/storage/subscriber/<discord_user_id>
-     Content-Type: application/json
-
-     <updated JSON object with status="active">
-     ```
-   - Grant the subscriber role:
-     ```
-     GET <Proxy_Base_URL>/discord/guilds/<Discord_Guild_ID>/members/<discord_user_id>/roles/<Subscriber_Role_ID>?method=PUT
-     ```
-   - Post to Subscribe_Channel:
-     ```
-     <@<discord_user_id>> — ✅ Payment verified (tx <signature>). Subscriber role granted. Valid until <expires_at>.
-     ```
-   - **STOP the loop.**
-
-   **If not verified** (signature exists but doesn't match amount/reference):
-   continue to the next iteration — this can happen if the wallet
-   broadcasts an unrelated transaction that happens to reference the same
-   account before the real payment lands.
-
-5. After 15 iterations with no verified match: **stop silently.** Do not
-   post anything. The subscriber remains in `pending_payment`; the hourly
-   `subscription_check` SOP will still pick up the payment whenever it
-   actually confirms — this loop is a latency optimization, not the only
-   detection path.
-
-This keeps the guarantee from the Atomicity section intact: the record is
-never marked `active` without a verified on-chain transaction, whether that
-verification happens here (seconds) or in the hourly SOP (fallback).
-
----
-
 ## STOP Condition Summary
 
 The skill halts immediately (without proceeding to the next step) whenever any of the following occur:
@@ -403,7 +337,7 @@ The skill halts immediately (without proceeding to the next step) whenever any o
 | `/keygen` call fails | 4 |
 | Proxy storage write fails (subscriber record) | 5a |
 
-Steps 5b, 6, 7, 8, and 9 do not have hard STOP conditions — Step 5b logs index failures without halting, Step 6 constructs the URL in-memory only, Step 7 constructs the Blink URL in-memory only, Step 8 logs failures rather than halting (the record is already persisted), and Step 9 is a best-effort polling loop that always completes after 15 iterations regardless of outcome.
+Steps 5b, 6, 7, and 8 do not have hard STOP conditions — Step 5b logs index failures without halting, Step 6 constructs the URL in-memory only, Step 7 constructs the Blink URL in-memory only, and Step 8 logs failures rather than halting (the record is already persisted).
 
 ---
 
