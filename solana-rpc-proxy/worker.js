@@ -621,14 +621,19 @@ export default {
     // Handle Discord channel messages passthrough
     // Matches /discord/channels/<channel_id>/messages
     const channelMessagesMatch = url.pathname.match(/^\/discord\/channels\/([^/]+)\/messages$/);
-    if (channelMessagesMatch) {
+    if (channelMessagesMatch && request.method !== 'POST') {
       const channelId = channelMessagesMatch[1];
       const limit = url.searchParams.get('limit');
+      const before = url.searchParams.get('before');
 
-      // Build Discord API URL, only include limit if it was provided
+      // Build Discord API URL, only include limit/before if provided
+      // (before enables paging past 100 messages for bulk cleanup)
       const discordUrl = new URL(`https://discord.com/api/v10/channels/${channelId}/messages`);
       if (limit !== null) {
         discordUrl.searchParams.set('limit', limit);
+      }
+      if (before !== null) {
+        discordUrl.searchParams.set('before', before);
       }
 
       const discordRes = await fetch(discordUrl.toString(), {
@@ -640,6 +645,66 @@ export default {
 
       const body = await discordRes.text();
       return new Response(body, { status: discordRes.status });
+    }
+
+    // Bulk-delete messages in a channel (Discord requires 2-100 IDs per call,
+    // and every message must be under 14 days old).
+    // POST /discord/channels/<channel_id>/messages/bulk-delete
+    // Body: { "messages": ["id1", "id2", ...] }
+    const bulkDeleteMatch = url.pathname.match(/^\/discord\/channels\/([^/]+)\/messages\/bulk-delete$/);
+    if (bulkDeleteMatch && request.method === 'POST') {
+      const channelId = bulkDeleteMatch[1];
+      let body;
+      try {
+        body = await request.json();
+      } catch {
+        return new Response(JSON.stringify({ error: 'invalid_json' }), { status: 400 });
+      }
+      if (!body || !Array.isArray(body.messages) || body.messages.length < 2 || body.messages.length > 100) {
+        return new Response(JSON.stringify({ error: 'messages must be an array of 2-100 IDs' }), { status: 400 });
+      }
+
+      const discordRes = await fetch(
+        `https://discord.com/api/v10/channels/${channelId}/messages/bulk-delete`,
+        {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ messages: body.messages }),
+        }
+      );
+
+      const responseBody = discordRes.status === 204 ? '{"success":true}' : await discordRes.text();
+      return new Response(responseBody, {
+        status: discordRes.status === 204 ? 200 : discordRes.status,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+
+    // Delete a single message (for anything older than 14 days, which
+    // bulk-delete refuses to touch).
+    // DELETE /discord/channels/<channel_id>/messages/<message_id>
+    // (also accepts GET with ?method=DELETE, same override pattern used elsewhere)
+    const singleDeleteMatch = url.pathname.match(/^\/discord\/channels\/([^/]+)\/messages\/([^/]+)$/);
+    if (singleDeleteMatch) {
+      const channelId = singleDeleteMatch[1];
+      const messageId = singleDeleteMatch[2];
+      const isDelete = request.method === 'DELETE' ||
+        (request.method === 'GET' && url.searchParams.get('method') === 'DELETE');
+
+      if (isDelete) {
+        const discordRes = await fetch(
+          `https://discord.com/api/v10/channels/${channelId}/messages/${messageId}`,
+          { method: 'DELETE', headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}` } }
+        );
+        const responseBody = discordRes.status === 204 ? '{"success":true}' : await discordRes.text();
+        return new Response(responseBody, {
+          status: discordRes.status === 204 ? 200 : discordRes.status,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
     }
 
     // Handle Discord guild members list
