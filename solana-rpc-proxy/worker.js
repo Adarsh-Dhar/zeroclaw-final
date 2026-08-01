@@ -646,6 +646,68 @@ export default {
       return new Response(body, { status: discordRes.status });
     }
 
+    // Storage endpoints for subscriber records (bypass ZeroClaw memory_store)
+    if (url.pathname.startsWith('/storage/')) {
+      const pathParts = url.pathname.split('/').filter(Boolean);
+      
+      // Handle ZeroClaw http_request tool's POST-body workaround
+      // The tool uses GET with method=PUT in query string and body URL-encoded
+      const methodOverride = url.searchParams.get('method');
+      const effectiveMethod = methodOverride ? methodOverride : method;
+      const bodyParam = url.searchParams.get('body');
+      const requestBody = bodyParam ? decodeURIComponent(bodyParam) : await request.text();
+      
+      if (pathParts[0] === 'storage' && pathParts[1] === 'subscriber') {
+        const userId = pathParts[2];
+        
+        if (effectiveMethod === 'GET') {
+          // Get subscriber record
+          const record = await env.SUBSCRIBERS.get(`subscriber:${userId}`);
+          if (record) {
+            return new Response(record, {
+              headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+            });
+          }
+          return new Response('null', {
+            headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+          });
+        }
+        
+        if (effectiveMethod === 'PUT' || effectiveMethod === 'POST') {
+          // Store subscriber record
+          await env.SUBSCRIBERS.put(`subscriber:${userId}`, requestBody);
+          return new Response('{"success":true}', {
+            headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+          });
+        }
+      }
+      
+      if (pathParts[0] === 'storage' && pathParts[1] === 'subscriber_index') {
+        if (effectiveMethod === 'GET') {
+          // Get subscriber index
+          const index = await env.SUBSCRIBERS.get('subscriber_index');
+          if (index) {
+            return new Response(index, {
+              headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+            });
+          }
+          return new Response('[]', {
+            headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+          });
+        }
+        
+        if (effectiveMethod === 'PUT' || effectiveMethod === 'POST') {
+          // Update subscriber index
+          await env.SUBSCRIBERS.put('subscriber_index', requestBody);
+          return new Response('{"success":true}', {
+            headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+          });
+        }
+      }
+      
+      return new Response('Invalid storage endpoint', { status: 400 });
+    }
+
     // Only allow GET requests for Solana RPC
     if (request.method !== 'GET') {
       return new Response('Method not allowed', { status: 405 });

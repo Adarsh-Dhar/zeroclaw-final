@@ -1,35 +1,17 @@
 ---
 name: onboarding
-description: Handle a Discord subscribe command by generating a unique Solana Pay URL and QR code, persisting the subscriber record in Memory_Store, and posting the payment link to the Subscribe_Channel.
+description: Handle a Discord subscribe command by generating a unique Solana Pay URL and QR code, persisting the subscriber record in proxy storage, and posting the payment link to the Subscribe_Channel.
 version: 1.0.0
 tools:
   - http_request
-  - memory_store
-  - memory_recall
   - shell
 ---
 
 # Skill: Onboarding — Subscribe Command Handling
 
-## ⚠️ CRITICAL: memory_store Format
+This skill is invoked by the `onboarding_check` SOP whenever it detects a `subscribe` command in the Subscribe_Channel from a registered user. It manages the full onboarding flow: state lookup, reference key generation, Subscriber_Record persistence (via proxy storage), Solana Pay URL construction, QR code generation, and Discord message posting.
 
-**ALL `memory_store` calls MUST use `content` as a JSON STRING, not a JSON object.**
-
-**WRONG (will fail):**
-```json
-{"name": "memory_store", "arguments": {"key": "test", "content": {"field": "value"}, "category": "test"}}
-```
-
-**CORRECT:**
-```json
-{"name": "memory_store", "arguments": {"key": "test", "content": "{\"field\":\"value\"}", "category": "test"}}
-```
-
-**This is the most common error. Always use JSON.stringify() on the content before passing it.**
-
-This skill is invoked by the `onboarding_check` SOP whenever it detects a `subscribe` command in the Subscribe_Channel from a registered user. It manages the full onboarding flow: state lookup, reference key generation, Subscriber_Record persistence, Solana Pay URL construction, QR code generation, and Discord message posting.
-
-**The skill uses only the `http_request` and Memory_Store (memory recall/store) tools. All external API calls route through the Proxy because the `http_request` tool has a POST-body bug — all writes must be issued as GET requests with URL-encoded parameters.**
+**The skill uses only the `http_request` tool. All external API calls route through the Proxy because the `http_request` tool has a POST-body bug — all writes must be issued as GET requests with URL-encoded parameters. Storage operations use the proxy's KV storage endpoints to bypass ZeroClaw's memory_store tool.**
 
 ---
 
@@ -84,23 +66,35 @@ When calling `http_request`, you MUST nest all parameters inside an `"arguments"
 {"name": "http_request", "url": "https://example.com", "method": "GET"}
 ```
 
-**For memory_store:**
-```json
-{"name": "memory_store", "arguments": {"key": "subscriber:123456", "content": "{\"discord_user_id\": \"123456\", ...}", "category": "subscribers"}}
-```
-
-**For memory_recall:**
-```json
-{"name": "memory_recall", "arguments": {"query": "subscriber:123456", "strategy": "bm25", "limit": 1}}
-```
-
 ---
 
 ## Step 1: Check Existing Subscriber Record
 
-**SKIPPED:** Due to a ZeroClaw runtime bug with memory_store parameter parsing, we skip the existing subscriber check. The user can proceed directly to payment generation.
+Call the proxy storage endpoint to check for existing subscriber record:
+```
+GET <Proxy_Base_URL>/storage/subscriber/<discord_user_id>
+```
 
-Continue to Step 2.
+**If the request fails (non-2xx response):**
+- This indicates the storage service is unavailable. Post an error message to Subscribe_Channel and STOP.
+- Post: `<@<discord_user_id>> — Memory service unavailable. Please try again later or contact support.` 
+- **STOP immediately.**
+
+**If the response is `null` (no record found):**
+- Continue to Step 2.
+
+**If a record is found (response is JSON):**
+- Parse the response as the subscriber record.
+- Check the `status` field:
+  - If `status = "pending_payment"`: The subscriber already has a pending invoice. Re-use the existing `solana_pay_url` and QR URL stored in the record. Post to Subscribe_Channel via the Proxy using Discord's mention format:
+    ```
+    <@<discord_user_id>> — You already have a pending payment. Pay here: <solana_pay_url from record>
+    QR: https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=<URL-encoded solana_pay_url from record>
+    ```
+    **STOP. Do not continue to Step 2.**
+  - If `status = "active"`: Allow the user to re-subscribe for renewal. Proceed to Step 2 to generate a new payment link for renewal (will update existing record). Additionally, ensure the user has the subscriber role by calling the grant-subscriber-role skill. If the role grant fails, log the error but continue with renewal flow.
+  - If `status = "registered"`: User has completed wallet registration but not yet paid. Proceed to Step 2 to generate a payment link (will update existing record).
+  - For any other status: Continue to Step 2.
 
 ---
 
@@ -117,8 +111,8 @@ Check that the `tier` input is one of `["standard", "premium"]` (exact match, ca
 
 **If the tier is valid:**
 - Set `expected_amount_sol` and `period_days` from the tier config table above:
-  - `standard` → `expected_amount_sol = 0.001`, `period_days = 30`
-  - `premium` → `expected_amount_sol = 0.0025`, `period_days = 30`
+  - `standard` → `expected_amount_sol = 0.001`, `period_days = 30` 
+  - `premium` → `expected_amount_sol = 0.0025`, `period_days = 30` 
 - Continue to Step 3.
 
 ---
@@ -126,7 +120,7 @@ Check that the `tier` input is one of `["standard", "premium"]` (exact match, ca
 ## Step 3: Validate Amount
 
 Verify that `expected_amount_sol` satisfies both conditions:
-1. `expected_amount_sol > 0`
+1. `expected_amount_sol > 0` 
 2. The number of decimal digits in `expected_amount_sol` is ≤ 9
 
 **If either condition fails:**
@@ -167,11 +161,84 @@ GET https://solana-rpc-proxy.dharadarsh0.workers.dev/keygen
 
 ---
 
-## Step 5: Skip Memory Storage
+## Step 5: Persist Subscriber_Record and Update Subscriber Index
 
-**SKIPPED:** Due to a ZeroClaw runtime bug with memory_store parameter parsing, we skip all memory storage operations. The payment verification system will handle subscriber record creation when the payment is confirmed.
+### Step 5a: Write the Subscriber_Record
 
-Continue to Step 6.
+Build the subscriber record as a JSON object:
+
+```json
+{
+  "discord_user_id": "<discord_user_id>",
+  "discord_username": "<discord_username>",
+  "wallet_address": <wallet_address_or_null>,
+  "tier": "<tier>",
+  "expected_amount_sol": <expected_amount_sol>,
+  "period_days": <period_days>,
+  "subscribed_at": null,
+  "expires_at": null,
+  "grace_started_at": null,
+  "reference_key": "<reference_key>",
+  "status": "pending_payment",
+  "last_known_status": null,
+  "renewal_dm_sent_for_expiry": null
+}
+```
+
+Placeholder rules:
+- `<discord_user_id>`, `<discord_username>`, `<tier>`, `<reference_key>` — plain text, with quotes
+- `<wallet_address_or_null>` — literal `null` (no quotes) if not available; otherwise the wallet address string with quotes
+- `<expected_amount_sol>` and `<period_days>` — plain numbers, unquoted (e.g. `0.001`, `30`)
+
+Call the proxy storage endpoint to store the record:
+```
+PUT <Proxy_Base_URL>/storage/subscriber/<discord_user_id>
+Content-Type: application/json
+
+<JSON object from above>
+```
+
+**If the storage write fails (non-2xx response):**
+- Log the specific error for debugging (if possible, include the error message in a Discord message to an admin channel).
+- Attempt fallback: Post the payment link directly to the user and inform them that the record will be created when the service recovers:
+  ```
+  <@<discord_user_id>> — Service temporarily unavailable. Your payment link is: <solana_pay_url>. Please save this link and try the subscribe command again later if payment verification fails.
+  QR: <qr_url>
+  ```
+- Discard the `reference_key` obtained in Step 4 — it must not be reused.
+- **STOP. Do not proceed to Discord message posting.**
+
+**If the write succeeds:** continue to Step 5b.
+
+---
+
+### Step 5b: Update the Subscriber Index
+
+The `subscriber_index` entry is the authoritative roster used by the subscription_check SOP to enumerate all subscribers without relying on relevance-ranked search. It must be kept in sync whenever a new subscriber is added.
+
+1. Get the current subscriber index from the proxy:
+   ```
+   GET <Proxy_Base_URL>/storage/subscriber_index
+   ```
+
+2. Parse the response as a JSON array of Discord user ID strings. If the response is `null`, `[]`, or malformed, start with an empty array `[]`.
+
+3. If `"<discord_user_id>"` is **not already present** in the array, append it.
+
+4. Update the subscriber index via the proxy:
+   ```
+   PUT <Proxy_Base_URL>/storage/subscriber_index
+   Content-Type: application/json
+
+   <updated JSON array>
+   ```
+
+**If the index write fails:**
+- Log the failure (write a memory entry under key `"error:index:<current_UTC_timestamp_ISO8601>:<discord_user_id>"` with `{"event": "subscriber_index_update_failed", "discord_user_id": "<discord_user_id>", "timestamp": "<ISO 8601 UTC>"}`).
+- The subscriber record written in Step 5a is still valid — **do not roll it back**. The index is a secondary structure; its inconsistency should be flagged for operator review, not used as a reason to abort onboarding.
+- Continue to Step 6.
+
+**If the index write succeeds:** continue to Step 6.
 
 ---
 
@@ -237,7 +304,7 @@ GET https://solana-rpc-proxy.dharadarsh0.workers.dev/discord/message?channel_id=
 **On success (2xx response):** The onboarding flow is complete.
 
 **On Proxy error (non-2xx response):**
-- Write an error memory entry to Memory_Store under the key `"error:<current_UTC_timestamp_ISO8601>:<discord_user_id>"` with the following content:
+- Write an error entry to proxy storage under the key `"error:<current_UTC_timestamp_ISO8601>:<discord_user_id>"` with the following content:
   ```json
   {
     "event": "onboarding_discord_post_failed",
@@ -248,6 +315,13 @@ GET https://solana-rpc-proxy.dharadarsh0.workers.dev/discord/message?channel_id=
     "timestamp": "<current_UTC_timestamp_ISO8601>",
     "error": "Discord message post failed"
   }
+  ```
+  Call:
+  ```
+  PUT <Proxy_Base_URL>/storage/subscriber/error:<current_UTC_timestamp_ISO8601>:<discord_user_id>
+  Content-Type: application/json
+
+  <error JSON object from above>
   ```
 - Do NOT silently discard the failure. The Subscriber_Record in `pending_payment` state remains valid — the subscriber can recover by re-issuing the subscribe command in Subscribe_Channel.
 
@@ -276,7 +350,7 @@ Run up to **15 iterations**, each:
    GET <Proxy_Base_URL>?method=getTransaction&signature=<signature>&encoding=jsonParsed
    ```
    and verify **both**:
-   - a SOL transfer to `Merchant_Wallet` for at least `expected_amount_sol`
+   - a SOL transfer to `Merchant_Wallet` for at least `expected_amount_sol` 
      appears in the parsed instructions, and
    - the `reference_key` appears among the transaction's account keys.
 
@@ -285,7 +359,13 @@ Run up to **15 iterations**, each:
      `expires_at = subscribed_at + period_days`.
    - Update the Subscriber_Record: `status = "active"`, set
      `subscribed_at` and `expires_at`, clear `grace_started_at`.
-   - Persist via `memory_store` (same JSON-string format as Step 5a).
+   - Persist via proxy storage:
+     ```
+     PUT <Proxy_Base_URL>/storage/subscriber/<discord_user_id>
+     Content-Type: application/json
+
+     <updated JSON object with status="active">
+     ```
    - Grant the subscriber role:
      ```
      GET <Proxy_Base_URL>/discord/guilds/<Discord_Guild_ID>/members/<discord_user_id>/roles/<Subscriber_Role_ID>?method=PUT
@@ -319,28 +399,28 @@ The skill halts immediately (without proceeding to the next step) whenever any o
 
 | Condition | STOP at Step |
 |---|---|
-| Active subscription found in Memory_Store | 1 |
-| Pending payment found in Memory_Store | 1 |
+| Active subscription found in proxy storage | 1 |
+| Pending payment found in proxy storage | 1 |
 | Unrecognized tier | 2 |
 | Invalid `expected_amount_sol` | 3 |
 | `/keygen` call fails | 4 |
-| Memory_Store write fails (subscriber record) | 5a |
+| Proxy storage write fails (subscriber record) | 5a |
 
-Steps 5b, 6, 6b, 8, and 9 do not have hard STOP conditions — Step 5b logs index failures without halting, Step 6 constructs the URL in-memory only, Step 6b constructs the Blink URL in-memory only, Step 8 logs failures rather than halting (the record is already persisted), and Step 9 is a best-effort polling loop that always completes after 15 iterations regardless of outcome.
+Steps 5b, 6, 7, 8, and 9 do not have hard STOP conditions — Step 5b logs index failures without halting, Step 6 constructs the URL in-memory only, Step 7 constructs the Blink URL in-memory only, Step 8 logs failures rather than halting (the record is already persisted), and Step 9 is a best-effort polling loop that always completes after 15 iterations regardless of outcome.
 
 ---
 
 ## Atomicity Guarantee
 
-The Subscriber_Record is **always written to Memory_Store before any Discord API call** (Step 5 precedes Step 8). If the Discord post fails, the record remains in `pending_payment` state. When the subscriber re-issues the subscribe command in Subscribe_Channel, Step 1 detects the `pending_payment` status and re-uses the existing URL without generating a new reference key.
+The Subscriber_Record is **always written to proxy storage before any Discord API call** (Step 5 precedes Step 8). If the Discord post fails, the record remains in `pending_payment` state. When the subscriber re-issues the subscribe command in Subscribe_Channel, Step 1 detects the `pending_payment` status and re-uses the existing URL without generating a new reference key.
 
 This makes the onboarding flow idempotent: multiple subscribe commands from the same user while `status = "pending_payment"` return the same payment link without side effects.
 
 ---
 
-## Error Memory Entry Schema
+## Error Entry Schema
 
-When the Discord post fails (Step 8), write to key `"error:<timestamp>:<discord_user_id>"`:
+When the Discord post fails (Step 8), write to proxy storage under key `"error:<timestamp>:<discord_user_id>"`:
 
 ```json
 {
