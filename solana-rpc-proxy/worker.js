@@ -226,7 +226,7 @@ async function buildSubscribeTransaction({
   const memoIx = new TransactionInstruction({
     keys: [],
     programId: new PublicKey(MEMO_PROGRAM_ID),
-    data: Buffer.from(`zeroclaw-sub:${discordUserId}`, 'utf-8'),
+    data: new TextEncoder().encode(`zeroclaw-sub:${discordUserId}`),
   });
 
   const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('finalized');
@@ -822,7 +822,45 @@ export default {
       const methodOverride = url.searchParams.get('method');
       const effectiveMethod = methodOverride ? methodOverride : request.method;
       const bodyParam = url.searchParams.get('body');
-      const requestBody = bodyParam ? decodeURIComponent(bodyParam) : await request.text();
+      let requestBody = bodyParam ? decodeURIComponent(bodyParam) : await request.text();
+      
+      // Handle individual query parameters as fallback (for when skill passes params directly)
+      if (!bodyParam && effectiveMethod === 'PUT' && pathParts[1] === 'subscriber') {
+        const userId = pathParts[2];
+        const discordUserId = url.searchParams.get('discord_user_id');
+        const tier = url.searchParams.get('tier');
+        const expectedAmountSol = url.searchParams.get('expected_amount_sol');
+        const periodDays = url.searchParams.get('period_days');
+        const referenceKey = url.searchParams.get('reference_key');
+        const status = url.searchParams.get('status');
+        const payUrl = url.searchParams.get('pay_url');
+        
+        // Only create record if at least discord_user_id is present
+        if (discordUserId) {
+          const record = {
+            discord_user_id: discordUserId,
+            discord_username: url.searchParams.get('discord_username'),
+            tier: tier || null,
+            expected_amount_sol: expectedAmountSol ? parseFloat(expectedAmountSol) : null,
+            period_days: periodDays ? parseInt(periodDays) : null,
+            reference_key: referenceKey || null,
+            status: status || null,
+            pay_url: payUrl || null,
+            wallet_address: url.searchParams.get('wallet_address') || null,
+            subscribed_at: null,
+            expires_at: null,
+            grace_started_at: null,
+            last_known_status: null,
+            renewal_dm_sent_for_expiry: null
+          };
+          requestBody = JSON.stringify(record);
+        }
+      }
+      
+      if (!bodyParam && effectiveMethod === 'PUT' && pathParts[1] === 'subscriber_index') {
+        const userIds = url.searchParams.getAll('ids');
+        requestBody = JSON.stringify(userIds);
+      }
       
       if (pathParts[0] === 'storage' && pathParts[1] === 'subscriber') {
         const userId = pathParts[2];
