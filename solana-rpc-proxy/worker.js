@@ -13,7 +13,7 @@ import {
 
 const MEMO_PROGRAM_ID = 'MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr';
 
-// Tier config must match shared/skills/default/onboarding/SKILL.md exactly.
+// Tier config must match shared/skills/default/negotiate-subscription/SKILL.md exactly.
 const TIER_CONFIG = {
   standard: { amountSol: 0.001, periodDays: 30 },
   premium: { amountSol: 0.0025, periodDays: 30 },
@@ -310,11 +310,8 @@ document.getElementById('connect').onclick = async () => {
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
-    // Declared once, up top: several route handlers below (including the
-    // /storage/* block) read this before the old single-use-site further
-    // down in the file used to declare it, which caused a
-    // "Cannot access 'method' before initialization" crash on every
-    // /storage/* request. Keep this the single source of truth for `method`.
+    // Declared once, up top — reused by multiple route handlers below
+    // and the Solana RPC dispatch at the bottom of this function.
     const method = url.searchParams.get('method');
 
     // Handle reference key generation
@@ -626,15 +623,19 @@ export default {
       const channelId = channelMessagesMatch[1];
       const limit = url.searchParams.get('limit');
       const before = url.searchParams.get('before');
+      const after = url.searchParams.get('after');
 
-      // Build Discord API URL, only include limit/before if provided
-      // (before enables paging past 100 messages for bulk cleanup)
+      // Build Discord API URL, only include limit/before/after if provided
+      // (before/after enables paging; after is used for incremental polling)
       const discordUrl = new URL(`https://discord.com/api/v10/channels/${channelId}/messages`);
       if (limit !== null) {
         discordUrl.searchParams.set('limit', limit);
       }
       if (before !== null) {
         discordUrl.searchParams.set('before', before);
+      }
+      if (after !== null) {
+        discordUrl.searchParams.set('after', after);
       }
 
       const discordRes = await fetch(discordUrl.toString(), {
@@ -812,119 +813,6 @@ export default {
 
       const body = await discordRes.text();
       return new Response(body, { status: discordRes.status });
-    }
-
-    // Storage endpoints for subscriber records (bypass ZeroClaw memory_store)
-    if (url.pathname.startsWith('/storage/')) {
-      const pathParts = url.pathname.split('/').filter(Boolean);
-      
-      // Handle ZeroClaw http_request tool's POST-body workaround
-      // The tool uses GET with method=PUT in query string and body URL-encoded
-      const methodOverride = url.searchParams.get('method');
-      const effectiveMethod = methodOverride ? methodOverride : request.method;
-      const bodyParam = url.searchParams.get('body');
-      let requestBody = bodyParam ? decodeURIComponent(bodyParam) : await request.text();
-      
-      // Handle individual query parameters as fallback (for when skill passes params directly)
-      if (!bodyParam && effectiveMethod === 'PUT' && pathParts[1] === 'subscriber') {
-        const userId = pathParts[2];
-        const discordUserId = url.searchParams.get('discord_user_id');
-        const tier = url.searchParams.get('tier');
-        const expectedAmountSol = url.searchParams.get('expected_amount_sol');
-        const periodDays = url.searchParams.get('period_days');
-        const referenceKey = url.searchParams.get('reference_key');
-        const status = url.searchParams.get('status');
-        const payUrl = url.searchParams.get('pay_url');
-        
-        // Only create record if at least discord_user_id is present
-        if (discordUserId) {
-          const record = {
-            discord_user_id: discordUserId,
-            discord_username: url.searchParams.get('discord_username'),
-            tier: tier || null,
-            expected_amount_sol: expectedAmountSol ? parseFloat(expectedAmountSol) : null,
-            period_days: periodDays ? parseInt(periodDays) : null,
-            reference_key: referenceKey || null,
-            status: status || null,
-            pay_url: payUrl || null,
-            wallet_address: url.searchParams.get('wallet_address') || null,
-            subscribed_at: null,
-            expires_at: null,
-            grace_started_at: null,
-            last_known_status: null,
-            renewal_dm_sent_for_expiry: null
-          };
-          requestBody = JSON.stringify(record);
-        }
-      }
-      
-      if (!bodyParam && effectiveMethod === 'PUT' && pathParts[1] === 'subscriber_index') {
-        const userIds = url.searchParams.getAll('ids');
-        // Only override the body from query params if ?ids= was actually provided.
-        // Without this guard, a real JSON body sent via curl would be silently
-        // replaced with an empty array, wiping the subscriber index.
-        if (userIds.length > 0) {
-          requestBody = JSON.stringify(userIds);
-        }
-      }
-      
-      if (pathParts[0] === 'storage' && pathParts[1] === 'subscriber') {
-        const userId = pathParts[2];
-        
-        if (effectiveMethod === 'GET') {
-          // Get subscriber record
-          const record = await env.SUBSCRIBERS.get(`subscriber:${userId}`);
-          if (record) {
-            return new Response(record, {
-              headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
-            });
-          }
-          return new Response('null', {
-            headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
-          });
-        }
-        
-        if (effectiveMethod === 'PUT' || effectiveMethod === 'POST') {
-          // Store subscriber record
-          await env.SUBSCRIBERS.put(`subscriber:${userId}`, requestBody);
-          return new Response('{"success":true}', {
-            headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
-          });
-        }
-        
-        if (effectiveMethod === 'DELETE') {
-          // Delete subscriber record
-          await env.SUBSCRIBERS.delete(`subscriber:${userId}`);
-          return new Response('{"success":true}', {
-            headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
-          });
-        }
-      }
-      
-      if (pathParts[0] === 'storage' && pathParts[1] === 'subscriber_index') {
-        if (effectiveMethod === 'GET') {
-          // Get subscriber index
-          const index = await env.SUBSCRIBERS.get('subscriber_index');
-          if (index) {
-            return new Response(index, {
-              headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
-            });
-          }
-          return new Response('[]', {
-            headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
-          });
-        }
-        
-        if (effectiveMethod === 'PUT' || effectiveMethod === 'POST') {
-          // Update subscriber index
-          await env.SUBSCRIBERS.put('subscriber_index', requestBody);
-          return new Response('{"success":true}', {
-            headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
-          });
-        }
-      }
-      
-      return new Response('Invalid storage endpoint', { status: 400 });
     }
 
     // Only allow GET requests for Solana RPC
