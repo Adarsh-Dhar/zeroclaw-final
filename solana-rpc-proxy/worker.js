@@ -570,14 +570,14 @@ export default {
 
       // Step 1: Open a DM channel with the user
       const dmChannelRes = await fetch(
-        `https://discord.com/api/v10/users/${userId}/channels`,
+        `https://discord.com/api/v10/users/@me/channels`,
         {
           method: 'POST',
           headers: {
             'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`,
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({}),
+          body: JSON.stringify({ recipient_id: userId }),
         }
       );
 

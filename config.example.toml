@@ -111,6 +111,13 @@ channel_id = "YOUR_DISCORD_CHANNEL_ID"  # Target channel for notifications
 server_id = "YOUR_DISCORD_SERVER_ID"  # Your Discord server ID
 subscriber_role_id = "YOUR_SUBSCRIBER_ROLE_ID"  # From Discord role settings
 
+# Required: without this block the agent ignores all inbound DMs.
+# external_peers = ["*"] allows any Discord user to start a conversation.
+[peer_groups.discord_dm]
+channel = "discord.test_discord"
+agents = ["test_agent"]
+external_peers = ["*"]
+
 [skill_bundles.default]
 directory = "/path/to/your/project/shared/skills/default"  # Update with your actual path
 
@@ -122,6 +129,18 @@ path = "/path/to/your/project"  # Update with your actual path
 
 [scheduler]
 enabled = true
+
+# Production subscription lifecycle defaults.
+# For local testing, override period_seconds/grace_period_seconds/renewal_reminder_seconds
+# in sops/subscription_check/SOP.md to smaller values (e.g. 1800/300/600)
+# and set the cron to */5 * * * *.
+# IMPORTANT: revert to production values before any real deployment.
+#
+# Production values (what to restore after testing):
+#   period_seconds = 2592000        # 30 days
+#   grace_period_seconds = 259200   # 3 days
+#   renewal_reminder_seconds = 432000  # 5 days before expiry
+#   cron schedule: "0 * * * *"      # hourly
 
 [gateway]
 paired_tokens = ["YOUR_PAIRED_TOKEN"]  # From zeroclaw gateway paircode

@@ -5,15 +5,15 @@
 ```toml
 [tiers.standard]
 amount_sol = 0.001
-period_days = 30
+period_seconds = 1800   # 30 minutes (testing); restore to 2592000 for production
 
 [tiers.premium]
 amount_sol = 0.0025
-period_days = 30
+period_seconds = 1800   # 30 minutes (testing); restore to 2592000 for production
 
 [subscription]
-grace_period_days = 3
-renewal_reminder_days = 5
+grace_period_seconds = 300      # 5 minutes (testing); restore to 259200 for production
+renewal_reminder_seconds = 600  # remind 10 min before expiry (testing); restore to 432000 for production
 
 [constants]
 proxy_base_url = "https://solana-rpc-proxy.dharadarsh0.workers.dev"
@@ -22,6 +22,14 @@ discord_guild = "1531347878906302484"
 subscriber_role = "1531669950819733575"
 subscription_channel = "1531347878906302487"
 wallet_mapping_path = "~/.zeroclaw/wallet_mapping.json"
+
+# Records with status "pending_payment" created by the live
+# negotiate-subscription DM flow are picked up here on the normal
+# */5 cycle as a safety net if the live flow didn't complete
+# verification itself (e.g. payment landed after the DM conversation
+# ended). No special-casing needed — Step 3's existing per-subscriber
+# payment check already handles "pending_payment" records the same
+# way it always has.
 ```
 
 ---
@@ -120,7 +128,7 @@ When calling `memory_store` or `memory_recall`, you MUST use the correct paramet
    For each entry in the JSON object:
    - Read `discord_user_id` and `discord_username` from the entry value. The JSON key is the `wallet_address`.
    - Call `GET {proxy_base_url}/keygen` to obtain a fresh `reference_key`. Expected response: `{"reference_key": "<base58 string>"}`. On non-2xx or missing `reference_key` field: skip this entry, continue with remaining entries.
-   - Construct a Subscriber_Record with the schema: discord_user_id, discord_username, wallet_address, tier="standard", expected_amount_sol=0.001, period_days=30, subscribed_at=null, expires_at=null, grace_started_at=null, reference_key from /keygen, status="pending_payment", last_known_status=null, renewal_dm_sent_for_expiry=null.
+   - Construct a Subscriber_Record with the schema: discord_user_id, discord_username, wallet_address, tier="standard", expected_amount_sol=0.001, period_seconds=1800, subscribed_at=null, expires_at=null, grace_started_at=null, reference_key from /keygen, status="pending_payment", last_known_status=null, renewal_dm_sent_for_expiry=null.
    - Store the record in Memory_Store under key `"subscriber:<discord_user_id>"`.
    After all entries have been processed, collect all successfully seeded `discord_user_id` values into a list and write the subscriber index: `store "subscriber_index" = JSON.stringify(["<id_1>", "<id_2>", ...])`. Set `subscriber_ids` = the list of seeded IDs.
 
@@ -148,7 +156,7 @@ When calling `memory_store` or `memory_recall`, you MUST use the correct paramet
    For each `record` in `subscriber_records`, execute the following logic in order:
 
    **Renewal Window Check:**
-   Only execute if ALL of the following are true: `record.status == "active"`, `record.expires_at` is not null and is a valid ISO 8601 UTC timestamp, `unix(record.expires_at) - current_time ≤ renewal_reminder_days * 86400` (within 5 days of expiry), and `record.renewal_dm_sent_for_expiry != record.expires_at` (deduplication).
+   Only execute if ALL of the following are true: `record.status == "active"`, `record.expires_at` is not null and is a valid ISO 8601 UTC timestamp, `unix(record.expires_at) - current_time ≤ renewal_reminder_seconds` (within reminder window of expiry), and `record.renewal_dm_sent_for_expiry != record.expires_at` (deduplication).
    If all four conditions hold:
    - Call `GET {proxy_base_url}/keygen` → capture `new_reference_key`. On non-2xx or missing field: retain `status = "pending_payment"`, log the error, skip DM delivery this cycle, and proceed to payment check with the unchanged record.
    - Record the current `record.expires_at` as `old_expires_at`.
@@ -169,9 +177,9 @@ When calling `memory_store` or `memory_recall`, you MUST use the correct paramet
 
    **Grace Period Logic:**
    Apply the following logic based on `record.status` after payment check. If `record.status` is `"active"`, `"check_failed"`, or `"pending_payment"`, skip to role action.
-   - **Newly lapsed (grace_started_at is null):** Condition: `record.status == "lapsed"` AND `record.grace_started_at == null`. Actions: Set `record.grace_started_at = current_time_iso`, persist the updated record to Memory_Store, set `effective_status = "grace"` for this cycle, build a grace renewal Solana Pay URL using `record.reference_key`, compute `grace_expiry_iso` = ISO 8601 UTC of `(current_time + grace_period_days * 86400)` seconds, post a grace reminder to Subscribe_Channel (channel_id: {subscription_channel}). On proxy failure: retry once after 2 seconds; if the second attempt also fails: log the failure and continue.
-   - **Within grace window:** Condition: `record.status == "lapsed"` AND `record.grace_started_at != null` AND `current_time - unix(record.grace_started_at) < grace_period_days * 86400`. Actions: Set `effective_status = "grace"`. No message posted (reminder already sent). Retain role.
-   - **Grace period elapsed (expired):** Condition: `record.status == "lapsed"` AND `record.grace_started_at != null` AND `current_time - unix(record.grace_started_at) >= grace_period_days * 86400`. Actions: Set `effective_status = "expired"`, compute `grace_expiry_iso` = ISO 8601 UTC of `(unix(record.grace_started_at) + grace_period_days * 86400)` seconds. Do NOT post the role removal proposal here — that happens in the next step.
+   - **Newly lapsed (grace_started_at is null):** Condition: `record.status == "lapsed"` AND `record.grace_started_at == null`. Actions: Set `record.grace_started_at = current_time_iso`, persist the updated record to Memory_Store, set `effective_status = "grace"` for this cycle, build a grace renewal Solana Pay URL using `record.reference_key`, compute `grace_expiry_iso` = ISO 8601 UTC of `(current_time + grace_period_seconds)` seconds, post a grace reminder to Subscribe_Channel (channel_id: {subscription_channel}). On proxy failure: retry once after 2 seconds; if the second attempt also fails: log the failure and continue.
+   - **Within grace window:** Condition: `record.status == "lapsed"` AND `record.grace_started_at != null` AND `current_time - unix(record.grace_started_at) < grace_period_seconds`. Actions: Set `effective_status = "grace"`. No message posted (reminder already sent). Retain role.
+   - **Grace period elapsed (expired):** Condition: `record.status == "lapsed"` AND `record.grace_started_at != null` AND `current_time - unix(record.grace_started_at) >= grace_period_seconds`. Actions: Set `effective_status = "expired"`, compute `grace_expiry_iso` = ISO 8601 UTC of `(unix(record.grace_started_at) + grace_period_seconds)` seconds. Do NOT post the role removal proposal here — that happens in the next step.
    - **Other statuses:** If `record.status` is `"active"`, `"check_failed"`, or `"pending_payment"`, set `effective_status = record.status`. No grace logic applies.
 
    **Discord Role Action:**
@@ -197,7 +205,7 @@ When calling `memory_store` or `memory_recall`, you MUST use the correct paramet
    - requires_confirmation: true
 
    For each subscriber where `role_action = "removal_proposed"` from the previous step:
-   - Compute `grace_expiry_iso` = ISO 8601 UTC of `(unix(record.grace_started_at) + grace_period_days * 86400)` seconds.
+   - Compute `grace_expiry_iso` = ISO 8601 UTC of `(unix(record.grace_started_at) + grace_period_seconds)` seconds.
    - Post a role removal proposal to Subscribe_Channel:
      ```
      GET {proxy_base_url}/discord/message?channel_id={subscription_channel}&content=<URL-encoded: "⚠️ ROLE REMOVAL PROPOSAL: @{record.discord_username}'s grace period has ended (expired at {grace_expiry_iso}). Admin approval required to remove Subscriber_Role.">

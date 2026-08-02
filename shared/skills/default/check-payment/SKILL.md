@@ -115,7 +115,7 @@ Compute `subscribed_at_unix`:
 
 The transaction's `blockTime` must satisfy:
 ```
-subscribed_at_unix ≤ blockTime ≤ subscribed_at_unix + period_days × 86400
+subscribed_at_unix ≤ blockTime ≤ subscribed_at_unix + period_seconds
 ```
 Transactions outside this window are discarded.
 
@@ -164,7 +164,7 @@ If one or more transactions satisfy ALL conditions in Step 3:
 - Set:
   - `status = "active"`
   - `subscribed_at` = ISO 8601 UTC string derived from the winning `blockTime` (e.g., `"2026-07-29T12:00:00.000Z"`)
-  - `expires_at` = ISO 8601 UTC string derived from `blockTime + period_days × 86400` seconds
+  - `expires_at` = ISO 8601 UTC string derived from `blockTime + period_seconds` seconds
   - `sender_wallet` = the extracted sender wallet address
 
 Proceed to Step 7.
