@@ -77,21 +77,30 @@ All tool parameters must be nested inside `"arguments"`.
    This member has a legitimate subscription. Skip — do NOT remove the role.
    Set `audit_result = "ok"` for this member.
 
-   **Case B — Record exists but `status` is anything else (`lapsed`, `expired`,
-   `grace`, `check_failed`, `pending_payment` is NOT in this case):**
+   **Case B — Record exists but `status` is `lapsed`, `expired`, `grace`, or `check_failed`:**
    Wait — `subscription_check` SOP owns the grace/lapsed/expired lifecycle.
    Do NOT remove the role here for lapsed/grace/expired status — that would
-   bypass the grace period and removal-proposal checkpoint. Only remove
-   for statuses that clearly have no subscription: `"cancelled"`, `"deleted"`,
-   or any unrecognised/null status value.
+   bypass the grace period and removal-proposal checkpoint.
    Set `audit_result = "skip_owned_by_subscription_check"` for lapsed/grace/expired.
+
+   **Case B2 — Record exists but `status` is `cancelled`, `deleted`, or any unrecognised value:**
+   These statuses indicate the subscription was explicitly ended or is invalid.
+   Proceed to role removal below (same as Case C).
+   Set `audit_result = "remove_cancelled"`.
 
    **Case C — No record found, or record has null/empty `status`:**
    This member holds the role with no subscription record at all — orphan grant.
    Proceed to role removal below.
    Set `audit_result = "remove_orphan"`.
 
-   **Role removal (Cases B-null and C only):**
+   **Case D — `memory_recall` itself errored (tool failure, not "no results"):**
+   This is NOT the same as Case C. A lookup failure means you don't know
+   this member's status — it does not mean they have no subscription.
+   Do NOT remove the role. Log to Memory_Store under
+   `"error:role_audit_lookup:{member.id}:<ISO 8601 UTC>"` and set
+   `audit_result = "lookup_failed_skipped"`. Continue to the next member.
+
+   **Role removal (Cases B2 and C only):**
 
    Step 2a — Remove the role:
    ```json
@@ -106,10 +115,13 @@ All tool parameters must be nested inside `"arguments"`.
    GET {proxy_base_url}/discord/message?channel_id={subscription_channel}&content=<URL-encoded:
    "🔴 ROLE REMOVED (audit): @{member.username} held Subscriber role with no active subscription record. Role removed automatically.">
    ```
+   For Case B2 (cancelled): include "cancelled" in the message context.
 
    Step 2c — On role removal non-2xx: log to Memory_Store under key
    `"error:role_audit_removal:{member.id}:<ISO 8601 UTC>"` and continue.
    Do NOT re-attempt in the same cycle.
+
+   For Case D only (lookup failed): already logged above when the error occurred.
 
    Append to `audit_rows`: `{member.username} | {audit_result} | {timestamp}`
 
@@ -122,8 +134,10 @@ All tool parameters must be nested inside `"arguments"`.
    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
    Role holders checked: {count of role_holders}
    Roles removed (orphan): {count where audit_result = "remove_orphan"}
+   Roles removed (cancelled): {count where audit_result = "remove_cancelled"}
    Skipped (active sub): {count where audit_result = "ok"}
    Skipped (subscription_check owns): {count where audit_result = "skip_owned_by_subscription_check"}
+   Skipped (lookup failed): {count where audit_result = "lookup_failed_skipped"}
    ```
 
    Post to Subscribe_Channel:
@@ -153,6 +167,6 @@ All tool parameters must be nested inside `"arguments"`.
 | Failure | Response |
 |---|---|
 | `/members` non-2xx or bad JSON | Log error entry, terminate cycle |
-| `memory_recall` tool error | Treat as "no record" (Case C), proceed to removal |
+| `memory_recall` tool error | Treat as unknown status (Case D) — skip, log, do NOT remove |
 | Role removal non-2xx | Log error entry, continue to next member |
 | Summary post non-2xx | Log failure, cycle still complete |

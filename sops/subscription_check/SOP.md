@@ -95,7 +95,7 @@ When calling `memory_store` or `memory_recall`, you MUST use the correct paramet
    - If the key is found and parses successfully: set `subscriber_ids = <parsed array>`. If the array is empty, proceed to migration. Otherwise skip migration and proceed to loading individual records.
 
    **On Memory_Store tool error** (the recall tool itself returns an error, not just an empty result):
-   1. Log the specific error details including timestamp and error message to Memory_Store under key `"error:memory_unavailable:<current_UTC_timestamp_ISO8601>"` with content:
+   - Log the specific error details including timestamp and error message to Memory_Store under key `"error:memory_unavailable:<current_UTC_timestamp_ISO8601>"` with content:
       ```json
       {
         "event": "memory_store_unavailable",
@@ -106,12 +106,12 @@ When calling `memory_store` or `memory_recall`, you MUST use the correct paramet
       }
       ```
 
-   2. Post an operator alert to Subscription_Channel:
+   - Post an operator alert to Subscription_Channel:
    ```
    GET {proxy_base_url}/discord/message?channel_id={subscription_channel}&content=<URL-encoded: "⚠️ OPERATOR ALERT: Memory_Store unavailable at subscription check cycle start. No role changes made.">
    ```
 
-   3. Then terminate the cycle immediately. Do NOT process any subscribers or modify any Discord roles.
+   - Then terminate the cycle immediately. Do NOT process any subscribers or modify any Discord roles.
 
    **Empty Index: Attempt One-Time Migration:**
    If `subscriber_ids` is empty (index not found or empty array), try to read `wallet_mapping.json` using the `read_file` tool at path `{wallet_mapping_path}`.
