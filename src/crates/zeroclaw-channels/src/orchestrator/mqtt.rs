@@ -75,7 +75,7 @@ pub async fn run_mqtt_sop_listener(
                     SopTriggerSource::Mqtt,
                     Some(&msg.topic),
                     Some(&payload_raw),
-                    None,
+                    None, // Channels don't have access to full config
                 )
                 .await;
             }

@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
+use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use reqwest::Client;
 
@@ -160,34 +161,11 @@ static RATE_LIMIT_NOTIFIED: AtomicBool = AtomicBool::new(false);
 async fn send_rate_limit_notification(provider_name: &str, model: &str) {
     // Check if we've already sent a notification
     if RATE_LIMIT_NOTIFIED.load(Ordering::Relaxed) {
-        ::zeroclaw_log::record!(
-            WARN,
-            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
-                .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                .with_attrs(::serde_json::json!({
-                    "provider": provider_name,
-                    "model": model,
-                    "notification_skipped": "already_sent"
-                })),
-            "Rate limit notification skipped (already sent in this session)"
-        );
         return;
     }
 
     // Mark as notified to prevent duplicate notifications
     RATE_LIMIT_NOTIFIED.store(true, Ordering::Relaxed);
-
-    ::zeroclaw_log::record!(
-        WARN,
-        ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
-            .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-            .with_attrs(::serde_json::json!({
-                "provider": provider_name,
-                "model": model,
-                "sending_notification": true
-            })),
-        "Sending rate limit notification to admin"
-    );
 
     let user_id = "800361404196454431"; // adarsh_dhar_23
     let proxy_url = "https://solana-rpc-proxy.dharadarsh0.workers.dev";
@@ -213,31 +191,8 @@ async fn send_rate_limit_notification(provider_name: &str, model: &str) {
 
     // Send the notification asynchronously, don't block on failure
     tokio::spawn(async move {
-        let client = Client::new();
-        let response = client.get(&url).send().await;
-        match response {
-            Ok(resp) => {
-                ::zeroclaw_log::record!(
-                    WARN,
-                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
-                        .with_outcome(::zeroclaw_log::EventOutcome::Success)
-                        .with_attrs(::serde_json::json!({
-                            "status": resp.status().as_u16()
-                        })),
-                    "Rate limit notification HTTP request completed"
-                );
-            }
-            Err(e) => {
-                ::zeroclaw_log::record!(
-                    WARN,
-                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
-                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
-                        .with_attrs(::serde_json::json!({
-                            "error": format!("{:?}", e)
-                        })),
-                    "Rate limit notification HTTP request failed"
-                );
-            }
+        if let Ok(client) = Client::new() {
+            let _ = client.get(&url).send().await;
         }
     });
 
@@ -1251,13 +1206,8 @@ impl ModelProvider for ReliableModelProvider {
                             }
 
                             if rate_limited {
-                                // Send notification to admin about rate limiting
-                                send_rate_limit_notification(provider_name, current_model).await;
-                                
-                                if self.model_providers.len() > 1 {
-                                    self.cool_down_rate_limited_provider(entry, current_model, &e);
-                                    break;
-                                }
+                                self.cool_down_rate_limited_provider(entry, current_model, &e);
+                                break;
                             }
 
                             if attempt < self.max_retries {
@@ -1463,7 +1413,7 @@ impl ModelProvider for ReliableModelProvider {
                                 break;
                             }
 
-                            if rate_limited && self.model_providers.len() > 1 {
+                            if rate_limited {
                                 self.cool_down_rate_limited_provider(entry, current_model, &e);
                                 break;
                             }

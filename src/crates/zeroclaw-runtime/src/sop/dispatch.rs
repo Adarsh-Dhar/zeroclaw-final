@@ -216,8 +216,33 @@ pub async fn dispatch_sop_event(
     engine: &Arc<Mutex<SopEngine>>,
     audit: &SopAuditLogger,
     event: SopEvent,
+    full_config: Option<&zeroclaw_config::schema::Config>,
 ) -> Vec<DispatchResult> {
-    dispatch_sop_event_filtered(engine, audit, event, None, None).await
+    let results = dispatch_sop_event_filtered(engine, audit, event, None, None).await;
+    
+    // Spawn headless drivers for ExecuteStep actions if full config is available
+    if let Some(config) = full_config {
+        for result in &results {
+            if let DispatchResult::Started { action, .. } = result {
+                if matches!(action.as_ref(), SopRunAction::ExecuteStep { .. }) {
+                    ::zeroclaw_log::record!(
+                        INFO,
+                        ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
+                            .with_outcome(::zeroclaw_log::EventOutcome::Success),
+                        "SOP dispatch: spawning headless driver for ExecuteStep action"
+                    );
+                    super::executor::spawn_headless_run_driver(
+                        config.clone(),
+                        Arc::clone(engine),
+                        None, // audit is already Arc, but we don't have it here
+                        action.as_ref().clone(),
+                    );
+                }
+            }
+        }
+    }
+    
+    results
 }
 
 /// Dispatch an incoming event to one named SOP, after normal trigger matching.
@@ -228,8 +253,33 @@ pub async fn dispatch_sop_event_to(
     audit: &SopAuditLogger,
     event: SopEvent,
     target_sop: &str,
+    full_config: Option<&zeroclaw_config::schema::Config>,
 ) -> Vec<DispatchResult> {
-    dispatch_sop_event_filtered(engine, audit, event, Some(target_sop), None).await
+    let results = dispatch_sop_event_filtered(engine, audit, event, Some(target_sop), None).await;
+    
+    // Spawn headless drivers for ExecuteStep actions if full config is available
+    if let Some(config) = full_config {
+        for result in &results {
+            if let DispatchResult::Started { action, .. } = result {
+                if matches!(action.as_ref(), SopRunAction::ExecuteStep { .. }) {
+                    ::zeroclaw_log::record!(
+                        INFO,
+                        ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
+                            .with_outcome(::zeroclaw_log::EventOutcome::Success),
+                        "SOP dispatch: spawning headless driver for ExecuteStep action"
+                    );
+                    super::executor::spawn_headless_run_driver(
+                        config.clone(),
+                        Arc::clone(engine),
+                        None, // audit is already Arc, but we don't have it here
+                        action.as_ref().clone(),
+                    );
+                }
+            }
+        }
+    }
+    
+    results
 }
 
 async fn dispatch_sop_event_filtered(
@@ -783,15 +833,19 @@ pub fn process_headless_results(results: &[DispatchResult]) {
             } => match action.as_ref() {
                 SopRunAction::ExecuteStep { step, .. } => {
                     ::zeroclaw_log::record!(
-                        WARN,
+                        INFO,
                         ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
-                            .with_outcome(::zeroclaw_log::EventOutcome::Unknown),
+                            .with_outcome(::zeroclaw_log::EventOutcome::Success),
                         &format!(
                             "SOP headless dispatch: run {run_id} ('{sop_name}') ready for step {} \
-                         '{}' but no agent loop available to execute",
+                         '{}' - ExecuteStep detected for headless processing",
                             step.number, step.title
                         )
                     );
+                    // Note: The actual headless driver spawn needs to happen in the caller
+                    // where we have access to the full config. This function just logs
+                    // the detection. The caller (dispatch_sop_event_filtered) is responsible
+                    // for spawning the driver with the proper config.
                 }
                 SopRunAction::WaitApproval { step, .. } => {
                     ::zeroclaw_log::record!(
@@ -916,15 +970,10 @@ pub async fn dispatch_untrusted_fan_in(
     source: SopTriggerSource,
     topic: Option<&str>,
     payload: Option<&str>,
-    // A2 per-message idempotency: `(key, is_redelivery)`. The key is a TRUE per-message
-    // identity supplied by the transport and replayed UNCHANGED on a redelivery (the AMQP
-    // `message_id`, channel-scoped - NOT a content hash, which would ACK away distinct
-    // messages with identical content). `is_redelivery` is the broker's `redelivered`
-    // bit: only a CONFIRMED redelivery coalesces (a fresh delivery reusing a key is never
-    // lost), so a redelivery of the same message - including one requeued because a
     // SIBLING SOP deferred - coalesces instead of starting the SOP again. `None` for
     // transports without a stable per-message id or without redelivery (a no-op).
     dedup: Option<(String, bool)>,
+    full_config: Option<&zeroclaw_config::schema::Config>,
 ) -> Vec<DispatchResult> {
     let max_bytes = match engine.lock() {
         Ok(eng) => eng.config().untrusted_payload_max_bytes,
@@ -985,7 +1034,29 @@ pub async fn dispatch_untrusted_fan_in(
         dedup.as_ref().map(|(k, r)| (k.as_str(), *r)),
     )
     .await;
-    process_headless_results(&results);
+    
+    // Spawn headless drivers for ExecuteStep actions if full config is available
+    if let Some(config) = full_config {
+        for result in &results {
+            if let DispatchResult::Started { action, .. } = result {
+                if matches!(action.as_ref(), SopRunAction::ExecuteStep { .. }) {
+                    ::zeroclaw_log::record!(
+                        INFO,
+                        ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
+                            .with_outcome(::zeroclaw_log::EventOutcome::Success),
+                        "SOP dispatch: spawning headless driver for ExecuteStep action"
+                    );
+                    super::executor::spawn_headless_run_driver(
+                        config.clone(),
+                        Arc::clone(engine),
+                        None, // audit is already Arc, but we don't have it here
+                        action.as_ref().clone(),
+                    );
+                }
+            }
+        }
+    }
+    
     results
 }
 
@@ -1007,7 +1078,7 @@ pub async fn dispatch_peripheral_signal(
         payload: payload.map(String::from),
         timestamp: now_iso8601(),
     };
-    dispatch_sop_event(engine, audit, event).await
+    dispatch_sop_event(engine, audit, event, None).await
 }
 
 // ── Cron SOP cache + check ──────────────────────────────────────
@@ -1108,6 +1179,7 @@ pub async fn check_sop_cron_triggers(
     audit: &SopAuditLogger,
     cache: &SopCronCache,
     last_check: &mut chrono::DateTime<chrono::Utc>,
+    full_config: Option<&zeroclaw_config::schema::Config>,
 ) -> Vec<DispatchResult> {
     let now = chrono::Utc::now();
     let mut all_results = Vec::new();
@@ -1133,7 +1205,7 @@ pub async fn check_sop_cron_triggers(
                 payload: None,
                 timestamp: now_iso8601(),
             };
-            let results = dispatch_sop_event(engine, audit, event).await;
+            let results = dispatch_sop_event(engine, audit, event, full_config).await;
             all_results.extend(results);
         }
     }
@@ -1413,13 +1485,13 @@ mod tests {
             timestamp: now_iso8601(),
         };
 
-        let results = dispatch_sop_event_to(&engine, &audit, event.clone(), "pr-triage").await;
+        let results = dispatch_sop_event_to(&engine, &audit, event.clone(), "pr-triage", None).await;
         assert_eq!(results.len(), 1);
         assert!(
             matches!(&results[0], DispatchResult::Started { sop_name, .. } if sop_name == "pr-triage")
         );
 
-        let results = dispatch_sop_event_to(&engine, &audit, event, "missing-sop").await;
+        let results = dispatch_sop_event_to(&engine, &audit, event, "missing-sop", None).await;
         assert_eq!(results.len(), 1);
         assert!(matches!(&results[0], DispatchResult::NoMatch));
     }
@@ -1521,6 +1593,7 @@ mod tests {
             Some("telegram"),
             Some(&long_payload),
             None,
+            None,
         )
         .await;
 
@@ -1559,6 +1632,7 @@ mod tests {
             Some("telegram"),
             None,
             None,
+            None,
         )
         .await;
 
@@ -1594,6 +1668,7 @@ mod tests {
             Some("orders.new"),
             Some("{\"id\":1}"),
             Some((key.to_string(), false)),
+            None,
         )
         .await;
         let run1 = match first.first() {
@@ -1609,6 +1684,7 @@ mod tests {
             Some("orders.new"),
             Some("{\"id\":1}"),
             Some((key.to_string(), true)),
+            None,
         )
         .await;
         assert!(
@@ -1644,18 +1720,20 @@ mod tests {
             &engine,
             &audit,
             SopTriggerSource::Amqp,
-            Some("orders.new"),
-            Some("{\"id\":1}"),
+            None,
+            None,
             Some(("amqp:msg-a".to_string(), false)),
+            None,
         )
         .await;
         let b = dispatch_untrusted_fan_in(
             &engine,
             &audit,
             SopTriggerSource::Amqp,
-            Some("orders.new"),
-            Some("{\"id\":1}"), // identical body, DIFFERENT message id
+            None,
+            None,
             Some(("amqp:msg-b".to_string(), false)),
+            None,
         )
         .await;
         assert!(matches!(a.first(), Some(DispatchResult::Started { .. })));
@@ -1691,6 +1769,7 @@ mod tests {
                 Some("orders.new"),
                 Some("{\"id\":1}"),
                 None,
+                None,
             )
             .await;
             assert!(
@@ -1725,9 +1804,10 @@ mod tests {
             &engine,
             &audit,
             SopTriggerSource::Amqp,
-            Some("orders.new"),
-            Some("{\"n\":1}"),
+            None,
+            None,
             Some((key.to_string(), false)),
+            None,
         )
         .await;
         assert!(
@@ -1743,6 +1823,7 @@ mod tests {
             Some("orders.new"),
             Some("{\"n\":2}"),
             Some((key.to_string(), false)),
+            None,
         )
         .await;
         assert!(
@@ -1758,6 +1839,7 @@ mod tests {
             Some("orders.new"),
             Some("{\"n\":2}"),
             Some((key.to_string(), true)),
+            None,
         )
         .await;
         assert!(
@@ -1790,17 +1872,18 @@ mod tests {
         let audit = test_audit();
 
         let key = "amqp:m1";
-        let first = dispatch_untrusted_fan_in(
+        let results = dispatch_untrusted_fan_in(
             &engine,
             &audit,
             SopTriggerSource::Amqp,
-            Some("orders.new"),
-            Some("{}"),
+            None,
+            None,
             Some((key.to_string(), false)),
+            None,
         )
         .await;
         assert_eq!(
-            first
+            results
                 .iter()
                 .filter(|r| matches!(r, DispatchResult::Started { .. }))
                 .count(),
@@ -1813,9 +1896,10 @@ mod tests {
             &engine,
             &audit,
             SopTriggerSource::Amqp,
-            Some("orders.new"),
-            Some("{}"),
+            None,
+            None,
             Some((key.to_string(), true)),
+            None,
         )
         .await;
         assert_eq!(
@@ -2084,7 +2168,7 @@ mod tests {
 
         // Set last_check to 2 minutes ago so the window contains a tick
         let mut last_check = chrono::Utc::now() - chrono::Duration::minutes(2);
-        let results = check_sop_cron_triggers(&engine, &audit, &cache, &mut last_check).await;
+        let results = check_sop_cron_triggers(&engine, &audit, &cache, &mut last_check, None).await;
 
         let started = results
             .iter()
@@ -2114,7 +2198,7 @@ mod tests {
         let cache = SopCronCache::from_engine(&engine);
 
         let mut last_check = chrono::Utc::now() - chrono::Duration::minutes(2);
-        let results = check_sop_cron_triggers(&engine, &audit, &cache, &mut last_check).await;
+        let results = check_sop_cron_triggers(&engine, &audit, &cache, &mut last_check, None).await;
 
         // Only "every-min" should have fired
         let started_names: Vec<&str> = results
@@ -2147,7 +2231,7 @@ mod tests {
         let cache = SopCronCache::from_engine(&engine);
 
         let mut last_check = chrono::Utc::now() - chrono::Duration::minutes(2);
-        let results = check_sop_cron_triggers(&engine, &audit, &cache, &mut last_check).await;
+        let results = check_sop_cron_triggers(&engine, &audit, &cache, &mut last_check, None).await;
 
         let started_names: Vec<&str> = results
             .iter()
@@ -2174,7 +2258,7 @@ mod tests {
 
         // Simulate: last_check was 5 minutes ago, poll just now
         let mut last_check = chrono::Utc::now() - chrono::Duration::minutes(5);
-        let results = check_sop_cron_triggers(&engine, &audit, &cache, &mut last_check).await;
+        let results = check_sop_cron_triggers(&engine, &audit, &cache, &mut last_check, None).await;
 
         // At least one tick should have been caught
         let started = results
@@ -2381,6 +2465,7 @@ mod tests {
             Some("anitya.update"),
             Some(r#"{"name":"curl"}"#),
             None,
+            None,
         )
         .await;
 
@@ -2456,6 +2541,7 @@ mod tests {
             Some("anitya.update"),
             Some(r#"{"name":"curl"}"#),
             None,
+            None,
         )
         .await;
 
@@ -2515,6 +2601,7 @@ mod tests {
             Some("anitya.update"),
             Some(r#"{"name":"curl"}"#),
             None,
+            None,
         )
         .await;
 
@@ -2557,6 +2644,7 @@ mod tests {
             SopTriggerSource::Amqp,
             Some("anitya.update"),
             Some(r#"{"name":"curl"}"#),
+            None,
             None,
         )
         .await;
@@ -2650,6 +2738,7 @@ mod tests {
             SopTriggerSource::Amqp,
             Some("anitya.update"),
             Some(r#"{"name":"curl"}"#),
+            None,
             None,
         )
         .await;

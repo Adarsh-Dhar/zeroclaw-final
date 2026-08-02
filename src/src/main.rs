@@ -4163,6 +4163,7 @@ async fn async_main(command: clap::Command) -> Result<()> {
                     sop_engine.as_ref(),
                     sop_audit.as_ref(),
                     current_config.sop.maintenance_interval_secs,
+                    &current_config,
                 );
 
                 #[cfg(feature = "gateway")]
@@ -4923,6 +4924,7 @@ async fn async_main(command: clap::Command) -> Result<()> {
                     sop_engine.as_ref(),
                     sop_audit.as_ref(),
                     config.sop.maintenance_interval_secs,
+                    &config,
                 );
                 let result = Box::pin(channels::start_channels(
                     config, None, cancel, sop_engine, sop_audit,
@@ -7784,6 +7786,7 @@ fn spawn_sop_maintenance(
     sop_engine: Option<&std::sync::Arc<std::sync::Mutex<zeroclaw_runtime::sop::SopEngine>>>,
     sop_audit: Option<&std::sync::Arc<zeroclaw_runtime::sop::SopAuditLogger>>,
     interval_secs: u64,
+    config: &crate::config::schema::Config,
 ) -> Option<tokio::task::JoinHandle<()>> {
     if interval_secs == 0 {
         return None;
@@ -7793,6 +7796,7 @@ fn spawn_sop_maintenance(
     let cron_cache = audit
         .as_ref()
         .map(|_| zeroclaw_runtime::sop::dispatch::SopCronCache::from_engine(&engine));
+    let config = config.clone();
     Some(::zeroclaw_spawn::spawn!(async move {
         let mut ticker = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -7804,6 +7808,7 @@ fn spawn_sop_maintenance(
                 audit.as_ref(),
                 cron_cache.as_ref(),
                 &mut last_cron_check,
+                &config,
             )
             .await
             else {
@@ -7855,6 +7860,7 @@ async fn run_sop_maintenance_tick(
     audit: Option<&std::sync::Arc<zeroclaw_runtime::sop::SopAuditLogger>>,
     cron_cache: Option<&zeroclaw_runtime::sop::dispatch::SopCronCache>,
     last_cron_check: &mut chrono::DateTime<chrono::Utc>,
+    config: &crate::config::schema::Config,
 ) -> Option<SopMaintenanceTickReport> {
     let maintenance = match engine.lock() {
         Ok(mut e) => e.run_maintenance_tick(),
@@ -7880,8 +7886,10 @@ async fn run_sop_maintenance_tick(
             audit,
             cache,
             last_cron_check,
+            Some(&config),
         )
         .await;
+        
         for result in &results {
             match result {
                 zeroclaw_runtime::sop::dispatch::DispatchResult::Started { .. } => {
@@ -9507,8 +9515,9 @@ mod tests {
         let cache = zeroclaw_runtime::sop::dispatch::SopCronCache::from_engine(&engine);
 
         let mut last_cron_check = chrono::Utc::now() - chrono::Duration::minutes(2);
+        let config = crate::config::schema::Config::load_or_init().await.unwrap();
         let report =
-            run_sop_maintenance_tick(&engine, Some(&audit), Some(&cache), &mut last_cron_check)
+            run_sop_maintenance_tick(&engine, Some(&audit), Some(&cache), &mut last_cron_check, &config)
                 .await
                 .expect("maintenance tick should complete");
 

@@ -163,8 +163,9 @@ impl FilesystemChannel {
                 &self.audit,
                 SopTriggerSource::Filesystem,
                 Some(&path_str),
-                Some(&payload.to_string()),
-                None,
+                payload.as_str(),
+                None, // Channels don't have access to full config
+                None, // Channels don't have access to full config
             )
             .await;
         }

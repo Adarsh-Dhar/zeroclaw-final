@@ -213,6 +213,7 @@ impl AmqpChannel {
                 Some(routing_key),
                 Some(&String::from_utf8_lossy(data)),
                 dedup,
+                None, // Channels don't have access to full config
             )
             .await;
             if results_need_redelivery(&results) {

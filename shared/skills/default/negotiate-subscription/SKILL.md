@@ -13,15 +13,20 @@ tools:
 ## When this applies
 
 Any direct message from a user who does not have an active subscription.
-Before doing anything else, check Memory_Store:
+**CRITICAL: Before doing anything else, check Memory_Store:**
 
 ```json
 {"name": "memory_recall", "arguments": {"query": "subscriber:<discord_user_id>", "strategy": "bm25", "limit": 1}}
 ```
 
-If a record is found with `status: "active"`, skip this skill entirely
-and respond conversationally — never re-run onboarding on someone who
-is already subscribed.
+**STOP IMMEDIATELY if a record is found with `status: "active"`**:
+- Do NOT generate a payment link
+- Do NOT check for on-chain payments
+- Do NOT grant any roles
+- Do NOT update any memory records
+- Simply respond conversationally that they already have an active subscription
+
+This check is mandatory - never re-run onboarding on someone who is already subscribed.
 
 ---
 
@@ -117,7 +122,12 @@ Build the Solana Pay URL:
 solana:{merchant_wallet}?amount={tier_amount_sol}&reference={reference_key}&label=ZeroClaw+Subscription&memo={discord_user_id}&cluster=devnet
 ```
 
-Send the payment link to the user in the DM. Also mention:
+Send the payment link to the user in the DM. Format it as a Markdown link for visibility:
+```
+[Payment Link](solana:{merchant_wallet}?amount={tier_amount_sol}&reference={reference_key}&label=ZeroClaw+Subscription&memo={discord_user_id}&cluster=devnet)
+```
+
+Also mention:
 - The exact SOL amount they need to send.
 - That they should reply in this conversation once they've paid.
 - That you'll verify on-chain before granting access (so they don't need

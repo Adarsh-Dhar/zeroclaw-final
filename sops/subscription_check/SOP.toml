@@ -2,7 +2,7 @@
 name = "subscription_check"
 description = "Check payment status for subscriber wallets against merchant wallet every 5 minutes"
 version = "1.0.0"
-max_concurrent = 200
+max_concurrent = 1
 execution_mode = "auto"
 enabled = true
 

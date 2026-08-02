@@ -4555,7 +4555,8 @@ async fn process_channel_message_body(
                 zeroclaw_runtime::sop::types::SopTriggerSource::Channel,
                 Some(&topic),
                 Some(&msg.content),
-                None,
+                None, // Channels don't have access to full config
+                None, // Channels don't have access to full config
             )
             .await;
         }
@@ -6791,9 +6792,9 @@ async fn dispatch_channel_sop_event(
     };
     let target_sop = channel_sop_target(msg);
     let results = if let Some(sop_name) = target_sop.as_deref() {
-        zeroclaw_runtime::sop::dispatch::dispatch_sop_event_to(engine, audit, event, sop_name).await
+        zeroclaw_runtime::sop::dispatch::dispatch_sop_event_to(engine, audit, event, sop_name, None).await
     } else {
-        zeroclaw_runtime::sop::dispatch::dispatch_sop_event(engine, audit, event).await
+        zeroclaw_runtime::sop::dispatch::dispatch_sop_event(engine, audit, event, None).await
     };
     zeroclaw_runtime::sop::dispatch::process_headless_results(&results);
     true

@@ -207,27 +207,13 @@ pub async fn handle_sop_run(
         timestamp: zeroclaw_runtime::sop::engine::now_iso8601(),
     };
 
+    let config = state.config.read().clone();
     let results =
-        zeroclaw_runtime::sop::dispatch::dispatch_sop_event_to(engine, audit, event, &name).await;
-    zeroclaw_runtime::sop::dispatch::process_headless_results(&results);
+        zeroclaw_runtime::sop::dispatch::dispatch_sop_event_to(engine, audit, event, &name, Some(&config)).await;
 
     for result in &results {
         match result {
-            zeroclaw_runtime::sop::dispatch::DispatchResult::Started { run_id, action, .. } => {
-                let needs_driver = matches!(
-                    action.as_ref(),
-                    zeroclaw_runtime::sop::SopRunAction::ExecuteStep { .. }
-                        | zeroclaw_runtime::sop::SopRunAction::DeterministicStep { .. }
-                );
-                if needs_driver {
-                    let config = state.config.read().clone();
-                    zeroclaw_runtime::sop::spawn_headless_run_driver(
-                        config,
-                        std::sync::Arc::clone(engine),
-                        Some(std::sync::Arc::clone(audit)),
-                        action.as_ref().clone(),
-                    );
-                }
+            zeroclaw_runtime::sop::dispatch::DispatchResult::Started { run_id, .. } => {
                 return Json(serde_json::json!({ "run_id": run_id })).into_response();
             }
             zeroclaw_runtime::sop::dispatch::DispatchResult::Skipped { reason, .. } => {

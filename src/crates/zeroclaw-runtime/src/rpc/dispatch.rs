@@ -4137,8 +4137,7 @@ impl RpcDispatcher {
         };
 
         let results =
-            crate::sop::dispatch::dispatch_sop_event_to(engine, audit, event, &req.name).await;
-        crate::sop::dispatch::process_headless_results(&results);
+            crate::sop::dispatch::dispatch_sop_event_to(engine, audit, event, &req.name, None).await;
 
         for result in &results {
             match result {

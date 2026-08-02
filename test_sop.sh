@@ -15,8 +15,8 @@ echo "========================================"
 echo "Capturing before state..."
 
 # Get current memory state
-GATEWAY_PORT=${GATEWAY_PORT:-62623}
-AUTH_TOKEN=${AUTH_TOKEN:-zc_a73d7ce3e168b0c7a0901e27408821736ce2201a3864a0335553247da8eca3b3}
+GATEWAY_PORT=${GATEWAY_PORT:-42617}
+AUTH_TOKEN=${AUTH_TOKEN:-zc_0470c268e2453188581af5314845342c7fd53b6faef50a0d33475ffdfbd64b2d}
 
 curl -s -X GET "http://127.0.0.1:${GATEWAY_PORT}/api/memory?query=subscriber:" -H "Authorization: Bearer ${AUTH_TOKEN}" > /tmp/before_subscribers.json 2>/dev/null || echo "No subscriber records found"
 curl -s -X GET "http://127.0.0.1:${GATEWAY_PORT}/api/memory?query=welcomed:" -H "Authorization: Bearer ${AUTH_TOKEN}" > /tmp/before_welcomed.json 2>/dev/null || echo "No welcomed records found"
