@@ -1,0 +1,14 @@
+[sop]
+name = "role_audit"
+description = "Cross-reference Discord subscriber role holders against Memory_Store subscription records and immediately remove the role from anyone with no active or pending subscription"
+version = "1.0.0"
+max_concurrent = 1
+execution_mode = "auto"
+enabled = true
+
+[[triggers]]
+type = "cron"
+expression = "*/10 * * * *"
+
+[[triggers]]
+type = "manual"

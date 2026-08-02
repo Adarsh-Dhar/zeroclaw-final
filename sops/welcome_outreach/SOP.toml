@@ -1,0 +1,14 @@
+[sop]
+name = "welcome_outreach"
+description = "Poll guild membership for non-subscribers and DM them a welcome/onboarding pitch"
+version = "1.0.0"
+max_concurrent = 1
+execution_mode = "auto"
+enabled = true
+
+[[triggers]]
+type = "cron"
+expression = "*/10 * * * *"
+
+[[triggers]]
+type = "manual"

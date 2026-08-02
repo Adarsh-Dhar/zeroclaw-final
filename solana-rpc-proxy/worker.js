@@ -709,6 +709,34 @@ export default {
       }
     }
 
+    // GET /discord/guilds/<guild_id>/members/list?limit=1000
+    // Returns a shaped-down array of {id, username} for non-bot members.
+    // Distinct from /members (which pages raw member objects) — this route
+    // is purpose-built for the welcome_outreach SOP so it doesn't have to
+    // parse full member objects or handle pagination itself.
+    const guildMembersListMatch = url.pathname.match(/^\/discord\/guilds\/([^/]+)\/members\/list$/);
+    if (guildMembersListMatch && request.method === 'GET') {
+      const guildId = guildMembersListMatch[1];
+      const limit = url.searchParams.get('limit') || '1000';
+      const resp = await fetch(
+        `https://discord.com/api/v10/guilds/${guildId}/members?limit=${limit}`,
+        { headers: { Authorization: `Bot ${env.DISCORD_BOT_TOKEN}` } }
+      );
+      if (!resp.ok) {
+        const errBody = await resp.text();
+        return new Response(errBody, { status: resp.status, headers: { 'Content-Type': 'application/json' } });
+      }
+      const members = await resp.json();
+      const shaped = Array.isArray(members)
+        ? members
+            .filter(m => m.user && !m.user.bot)
+            .map(m => ({ id: m.user.id, username: m.user.username }))
+        : [];
+      return new Response(JSON.stringify(shaped), {
+        headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+      });
+    }
+
     // Handle Discord guild members list
     // Matches /discord/guilds/<guild_id>/members
     const guildMembersMatch = url.pathname.match(/^\/discord\/guilds\/([^/]+)\/members$/);
