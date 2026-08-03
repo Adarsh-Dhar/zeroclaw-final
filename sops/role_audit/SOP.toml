@@ -8,7 +8,7 @@ enabled = true
 
 [[triggers]]
 type = "cron"
-expression = "*/10 * * * *"
+expression = "*/30 * * * *"
 
 [[triggers]]
 type = "manual"

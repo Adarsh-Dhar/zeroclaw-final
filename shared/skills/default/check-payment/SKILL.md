@@ -1,7 +1,7 @@
 ---
 name: check-payment
-description: Check payment status for Solana Pay subscriptions using per-user reference keys, enforce amount verification, respect subscription windows, and manage Discord roles.
-version: 1.0.0
+description: Check payment status for Solana Pay subscriptions using per-user reference keys, enforce amount verification, respect subscription windows, and manage Discord roles. Supports batch processing of multiple subscriber records in a single call to minimize API usage and avoid rate limits.
+version: 2.0.0
 tools:
   - http_request
   - memory_store
@@ -12,7 +12,7 @@ tools:
 
 ## Overview
 
-This skill receives a `Subscriber_Record` object from SOP context and performs payment verification plus Discord role management. It does NOT take a raw wallet address — it uses the `reference_key` field from the record to look up transactions.
+This skill receives an array of `Subscriber_Record` objects from SOP context and performs payment verification plus Discord role management for all records in a single batch call. It does NOT take a raw wallet address — it uses the `reference_key` field from each record to look up transactions. Batch processing reduces LLM API calls and avoids rate limits.
 
 ## Constants
 
@@ -39,7 +39,7 @@ INCORRECT (will fail):
 
 ## Input
 
-A `Subscriber_Record` object from SOP context with the following fields:
+An array of `Subscriber_Record` objects from SOP context. Each record has the following fields:
 
 | Field | Type | Description |
 |---|---|---|
@@ -52,47 +52,53 @@ A `Subscriber_Record` object from SOP context with the following fields:
 | `status` | string | Current status: `pending_payment`, `active`, `lapsed`, `grace`, `expired`, `check_failed` |
 | (other fields) | various | All other Subscriber_Record fields as defined in the schema |
 
+## Output
+
+An array of result objects with the same length as the input array, where each result corresponds to the input record at the same index. Each result object contains:
+
+| Field | Type | Description |
+|---|---|---|
+| `status` | string | Updated status: `active`, `lapsed`, `check_failed`, or unchanged from input |
+| `role_action` | string | Discord role action: `granted`, `removed`, `no_change`, or `check_failed` |
+| `expires_at` | string \| null | ISO 8601 UTC expiry timestamp if payment found, otherwise `null` |
+| `highest_amount_sol_seen` | number \| null | Highest SOL amount seen in any transaction, or `null` if none found |
+| `sender_wallet` | string \| null | Sender wallet address from qualifying transaction, or `null` |
+
 ## Pre-flight: Validate expected_amount_sol
 
-Before making any RPC calls, validate the `expected_amount_sol` field from the Subscriber_Record:
-- If `expected_amount_sol` is absent, `null`, or not a valid positive number, this is a configuration error.
+Before making any RPC calls, validate the `expected_amount_sol` field from each Subscriber_Record:
+- If `expected_amount_sol` is absent, `null`, or not a valid positive number for any record, this is a configuration error.
 - Log the error (e.g., write a memory entry: `"error:config:<discord_user_id>"` with the nature of the failure).
-- Set `status = "check_failed"`.
-- Do NOT update the subscriber's Discord role.
-- Return immediately:
-  ```json
-  {
-    "status": "check_failed",
-    "role_action": "no_change",
-    "expires_at": null,
-    "highest_amount_sol_seen": null,
-    "sender_wallet": null
-  }
-  ```
+- Set `status = "check_failed"` for that specific record.
+- Do NOT update that subscriber's Discord role.
+- Continue processing remaining records (failure in one record does not abort the entire batch).
 
-## Step 1: Fetch Signatures for Merchant Wallet
+## Step 1: Batch Fetch Signatures for Merchant Wallet
 
-Call:
+Call once for the entire batch:
 ```
 GET https://solana-rpc-proxy.dharadarsh0.workers.dev/?method=getSignaturesForAddress&wallet={merchant_wallet}&limit=100
 ```
 
 **On any proxy error** (non-2xx status, timeout, or unparseable JSON):
-- Save the current `status` value as `last_known_status` in the record.
-- Set `status = "check_failed"`.
-- Return immediately:
+- Save the current `status` value as `last_known_status` in all records.
+- Set `status = "check_failed"` for all records.
+- Return an array of failure results for all records:
   ```json
-  {
-    "status": "check_failed",
-    "role_action": "no_change",
-    "expires_at": null,
-    "highest_amount_sol_seen": null,
-    "sender_wallet": null
-  }
+  [
+    {
+      "status": "check_failed",
+      "role_action": "no_change",
+      "expires_at": null,
+      "highest_amount_sol_seen": null,
+      "sender_wallet": null
+    },
+    ...
+  ]
   ```
 - Do NOT proceed to any further steps.
 
-## Step 2: Fetch Individual Transactions
+## Step 2: Batch Fetch Individual Transactions
 
 For each signature in the list returned by Step 1, call:
 ```
@@ -102,11 +108,13 @@ GET https://solana-rpc-proxy.dharadarsh0.workers.dev/?method=getTransaction&sign
 **On error for a specific signature** (non-2xx or unparseable response):
 - Mark that individual signature as `check_failed`.
 - Continue to the next signature.
-- Do NOT abort the entire check.
+- Do NOT abort the entire batch check.
 
-## Step 3: Filter and Score Transactions
+After fetching all transactions, build a shared transaction map that all subscriber records can query against. This avoids redundant RPC calls across subscribers.
 
-For each successfully retrieved transaction, evaluate ALL of the following conditions. A transaction qualifies only if every condition holds:
+## Step 3: Process Each Subscriber Record Against Shared Transaction Map
+
+For each `Subscriber_Record` in the input array, evaluate ALL of the following conditions against the shared transaction map. A transaction qualifies only if every condition holds:
 
 ### Condition A: Subscription Window
 Compute `subscribed_at_unix`:
@@ -156,105 +164,75 @@ highest_amount_sol_seen = max_lamports / 1,000,000,000
 ```
 (a float with 9 decimal places, e.g. `0.001500000`). If no SOL transfers are found at all, this value remains `null`.
 
-## Step 4: Qualifying Transactions Found
+## Step 4: Per-Subscriber Result Generation
 
-If one or more transactions satisfy ALL conditions in Step 3:
+For each subscriber record, based on the transaction filtering results:
+
+**If one or more transactions satisfy ALL conditions in Step 3:**
 - Select the transaction with the **highest `blockTime`** (most recent).
 - Extract the sender wallet address from the winning transaction's transfer instruction `source` field
-- Set:
+- Set result for this subscriber:
   - `status = "active"`
   - `subscribed_at` = ISO 8601 UTC string derived from the winning `blockTime` (e.g., `"2026-07-29T12:00:00.000Z"`)
   - `expires_at` = ISO 8601 UTC string derived from `blockTime + period_seconds` seconds
   - `sender_wallet` = the extracted sender wallet address
 
-Proceed to Step 7.
+**If NO qualifying transactions were found, but at least one SOL transfer to the Merchant Wallet was detected with an amount below the required threshold:**
+- Set result for this subscriber:
+  - `status = "lapsed"`
+  - `sender_wallet = null` (no qualifying transaction found)
+- Note: The SOP will handle posting the insufficient amount notice
 
-## Step 5: No Qualifying Transactions — Insufficient Amount
+**If NO SOL transfers were found at all:**
+- Set result for this subscriber:
+  - `status = "lapsed"`
+  - `sender_wallet = null` (no transaction found)
 
-If NO qualifying transactions were found, but at least one SOL transfer to the Merchant Wallet was detected with an amount below the required threshold:
-- Set `status = "lapsed"`.
-- Set `sender_wallet = null` (no qualifying transaction found).
-- Post a notice to Subscribe_Channel via proxy:
+Proceed to Step 5 for Discord role checking.
+
+## Step 5: Batch Discord Role Checking
+
+For each subscriber record with their computed result, check the current Discord role status:
+
+Call for each subscriber:
+```
+GET https://solana-rpc-proxy.dharadarsh0.workers.dev/discord/guilds/{discord_guild}/members/{discord_user_id}
+```
+
+**On error checking membership (non-2xx, not 404):**
+- Set `role_action = "check_failed"` for that subscriber
+- Continue with remaining subscribers
+
+**If member has subscriber_role:**
+- Set `role_action = "no_change"` for that subscriber
+
+**If member does NOT have subscriber_role (or 404 response):**
+- If result status is `active`: Grant the role via:
   ```
-  GET https://solana-rpc-proxy.dharadarsh0.workers.dev/discord/message?channel_id=1531347878906302487&content=<URL-encoded message>
+  GET https://solana-rpc-proxy.dharadarsh0.workers.dev/discord/guilds/{discord_guild}/members/{discord_user_id}/roles/{subscriber_role}?method=PUT
   ```
-  Message content (URL-encode before sending):
-  ```
-  ⚠️ @{discord_username} — payment detected but amount insufficient. Highest amount seen: {highest_amount_sol_seen} SOL. Required: {expected_amount_sol} SOL.
-  ```
+  - On success: set `role_action = "granted"`
+  - On non-2xx: set `role_action = "check_failed"`
+- If result status is not `active`: set `role_action = "no_change"`
 
-Proceed to Step 7.
+## Step 6: Return Batch Results
 
-## Step 6: No SOL Transactions Found
-
-If NO SOL transfers were found at all (no transactions matched conditions B–D, regardless of amount):
-- Set `status = "lapsed"`.
-- Set `sender_wallet = null` (no transaction found).
-
-Proceed to Step 7.
-
-## Step 7: Check Current Discord Role
-
-Call:
-```
-GET https://solana-rpc-proxy.dharadarsh0.workers.dev/discord/guilds/1531347878906302484/members/{discord_user_id}
-```
-
-Check if the role `"1531669950819733575"` appears in the `roles` array of the response JSON.
-
-- If it does: `subscriber_has_role = true`
-- If it does not: `subscriber_has_role = false`
-- If the Discord API call fails (non-2xx response): treat as `check_failed` **for role purposes only** — set `role_check_failed = true`.
-
-## Step 8: Apply Role Logic
-
-Evaluate the following rules **in order**, applying the first matching rule:
-
-| Condition | `role_action` | Action |
-|---|---|---|
-| `status = "check_failed"` | `"no_change"` | No Discord role change. Post an error notice to Subscribe_Channel via proxy: `⚠️ Payment check failed for @{discord_username}. Failed at: {ISO 8601 UTC timestamp of failure}. Manual review required.` Then return. |
-| `role_check_failed = true` | `"no_change"` | Discord role check failed; no change. Return. |
-| `status = "active"` AND `subscriber_has_role = false` | `"grant_role"` | Execute role grant via proxy using ?method=PUT. Record grant timestamp in Subscriber_Record. |
-| `status = "active"` AND `subscriber_has_role = true` | `"no_change"` | Subscriber already has role; nothing to do. |
-| `status = "grace"` | `"no_change"` | Retain role during grace window. |
-| `status = "lapsed"` AND `subscriber_has_role = true` | `"propose_removal"` | Post removal proposal to Subscribe_Channel via proxy. |
-| `status = "lapsed"` AND `subscriber_has_role = false` | `"no_change"` | Subscriber does not have role; nothing to do. |
-| `status = "expired"` AND `subscriber_has_role = true` | `"propose_removal"` | Post removal proposal to Subscribe_Channel via proxy. |
-| `status = "expired"` AND `subscriber_has_role = false` | `"no_change"` | Nothing to do. |
-
-### Grant Role (when `role_action = "grant_role"`)
-Execute via the `http_request` tool:
-```
-{"name": "http_request", "arguments": {"url": "https://solana-rpc-proxy.dharadarsh0.workers.dev/discord/guilds/1531347878906302484/members/{discord_user_id}/roles/1531669950819733575?method=PUT", "method": "GET"}}
-```
-The proxy requires `?method=PUT` as a query parameter to specify the HTTP method for the Discord API call, but the http_request tool should call it with method="GET".
-
-After a successful grant, record the grant timestamp in the Subscriber_Record by setting a `role_granted_at` field to the current ISO 8601 UTC timestamp (e.g., `"2026-07-29T12:00:00.000Z"`). This persists into Memory_Store when the SOP updates the record after the skill returns.
-
-### Propose Removal (when `role_action = "propose_removal"`)
-Post to Subscribe_Channel via proxy:
-```
-GET https://solana-rpc-proxy.dharadarsh0.workers.dev/discord/message?channel_id=1531347878906302487&content=<URL-encoded message>
-```
-Message content (URL-encode before sending):
-```
-⚠️ Payment lapsed for @{discord_username}. Propose removal of subscriber role. Admin approval required. React with ✅ to approve or ❌ to decline.
-```
-Do NOT remove the role until admin approval is received.
-
-## Return Structure
-
-After completing all steps, return the following JSON object:
+Return an array of result objects with the same length as the input array, where each result corresponds to the input record at the same index:
 
 ```json
-{
-  "status": "<active|lapsed|check_failed>",
-  "role_action": "<grant_role|propose_removal|no_change>",
-  "expires_at": "<ISO 8601 UTC string or null>",
-  "highest_amount_sol_seen": "<float with 9 decimal places or null>",
-  "sender_wallet": "<base58 wallet address or null>"
-}
+[
+  {
+    "status": "<final_status>",
+    "role_action": "<final_role_action>",
+    "expires_at": "<final_expires_at_or_null>",
+    "highest_amount_sol_seen": "<final_highest_amount_or_null>",
+    "sender_wallet": "<final_sender_wallet_or_null>"
+  },
+  ...
+]
 ```
+
+**Note:** Discord role changes (grant/removal proposals) are handled by the SOP based on the returned status and role_action values. The skill focuses on payment verification and role status checking only.
 
 ### Return value semantics
 

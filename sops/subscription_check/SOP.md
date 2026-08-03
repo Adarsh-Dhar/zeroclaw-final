@@ -147,33 +147,41 @@ When calling `memory_store` or `memory_recall`, you MUST use the correct paramet
    Set `current_time_iso` = current UTC time as ISO 8601 string with millisecond precision (e.g., `"2026-08-01T12:00:00.000Z"`).
    Set `summary_rows` = empty list.
 
-3. **Process each subscriber** — Check renewal window, invoke payment check, apply grace logic, determine role actions, persist records, and build summary.
+3. **Process all subscribers in batch** — Check renewal window, invoke payment check (batched), apply grace logic, determine role actions, persist records, and build summary.
    - tools: http_request, memory_store
    - requires_confirmation: false
 
-   CRITICAL: Process each subscriber independently. A failure in any sub-step for one subscriber MUST NOT prevent processing of the remaining subscribers. Catch errors per subscriber and record `role_action = "check_failed"` for that subscriber in the summary.
+   CRITICAL: Process all subscribers in a single batch to minimize LLM API calls and avoid rate limits. Call the check-payment skill ONCE with all subscriber records as a batch, then process results. A failure in any sub-step for one subscriber MUST NOT prevent processing of the remaining subscribers. Catch errors per subscriber and record `role_action = "check_failed"` for that subscriber in the summary.
 
-   For each `record` in `subscriber_records`, execute the following logic in order:
+   **Batch Payment Check:**
+   Call the `check-payment` SKILL once, passing the entire `subscriber_records` array as the context input. The SKILL processes all records in a single invocation and returns an array of results with the same length as input, where each result contains status, expires_at, highest_amount_sol_seen, and sender_wallet for the corresponding subscriber record.
 
-   **Renewal Window Check:**
-   Only execute if ALL of the following are true: `record.status == "active"`, `record.expires_at` is not null and is a valid ISO 8601 UTC timestamp, `unix(record.expires_at) - current_time ≤ renewal_reminder_seconds` (within reminder window of expiry), and `record.renewal_dm_sent_for_expiry != record.expires_at` (deduplication).
-   If all four conditions hold:
-   - Call `GET {proxy_base_url}/keygen` → capture `new_reference_key`. On non-2xx or missing field: retain `status = "pending_payment"`, log the error, skip DM delivery this cycle, and proceed to payment check with the unchanged record.
-   - Record the current `record.expires_at` as `old_expires_at`.
-   - Update `record`: set `record.reference_key = new_reference_key`, set `record.status = "pending_payment"`, set `record.renewal_dm_sent_for_expiry = old_expires_at`, keep `record.subscribed_at` and `record.expires_at` unchanged.
-   - Persist the updated record to Memory_Store immediately under key `"subscriber:{record.discord_user_id}"`.
-   - Build the renewal Solana Pay URL: `solana:{merchant_wallet}?amount={record.expected_amount_sol}&reference={new_reference_key}&label=ZeroClaw+Subscription&memo={record.discord_user_id}&cluster=devnet`.
-   - Build the renewal DM message with subscription details and renewal URL.
-   - Send the renewal DM via `GET {proxy_base_url}/discord/dm?user_id={record.discord_user_id}&content=<URL-encoded renewal message>`. On proxy failure: retain `status = "pending_payment"`, log the failure, and proceed to payment check.
+   If the batch call fails entirely (SKILL returns error or incomplete results):
+   - Set `role_action = "check_failed"` for all subscribers in the summary
+   - Post error notice to Subscribe_Channel
+   - Terminate processing for this cycle
 
-   **Invoke check-payment SKILL:**
-   Call the `check-payment` SKILL, passing the current `record` as the full context input. The SKILL returns status, role_action, expires_at, highest_amount_sol_seen, and sender_wallet.
-   Update the in-memory `record` based on the SKILL result:
+   If the batch call succeeds:
+   For each index `i` in `subscriber_records`, update the in-memory `record` based on the corresponding SKILL result:
    - Update `record.status` from the SKILL result `status` field.
    - If the SKILL returns a non-null `expires_at`, update `record.expires_at` to that value.
    - If the SKILL returns `status = "active"`, set `record.grace_started_at = null`.
    - If the SKILL returns `status = "check_failed"`, set `record.last_known_status = record.status` (the prior status value before overwriting), then set `record.status = "check_failed"`.
    - If the SKILL returns a non-null `sender_wallet` and `record.wallet_address` is null, update `record.wallet_address` to the returned `sender_wallet`. This captures the wallet address from successful payments for users who didn't complete registration.
+
+   **Per-Subscriber Processing:**
+   For each `record` in `subscriber_records` (now updated with batch payment check results), execute the following logic in order:
+
+   **Renewal Window Check:**
+   Only execute if ALL of the following are true: `record.status == "active"`, `record.expires_at` is not null and is a valid ISO 8601 UTC timestamp, `unix(record.expires_at) - current_time ≤ renewal_reminder_seconds` (within reminder window of expiry), and `record.renewal_dm_sent_for_expiry != record.expires_at` (deduplication).
+   If all four conditions hold:
+   - Call `GET {proxy_base_url}/keygen` → capture `new_reference_key`. On non-2xx or missing field: retain `status = "pending_payment"`, log the error, skip DM delivery this cycle, and proceed to grace logic with the unchanged record.
+   - Record the current `record.expires_at` as `old_expires_at`.
+   - Update `record`: set `record.reference_key = new_reference_key`, set `record.status = "pending_payment"`, set `record.renewal_dm_sent_for_expiry = old_expires_at`, keep `record.subscribed_at` and `record.expires_at` unchanged.
+   - Persist the updated record to Memory_Store immediately under key `"subscriber:{record.discord_user_id}"`.
+   - Build the renewal Solana Pay URL: `solana:{merchant_wallet}?amount={record.expected_amount_sol}&reference={new_reference_key}&label=ZeroClaw+Subscription&memo={record.discord_user_id}&cluster=devnet`.
+   - Build the renewal DM message with subscription details and renewal URL.
+   - Send the renewal DM via `GET {proxy_base_url}/discord/dm?user_id={record.discord_user_id}&content=<URL-encoded renewal message>`. On proxy failure: retain `status = "pending_payment"`, log the failure, and proceed to grace logic.
 
    **Grace Period Logic:**
    Apply the following logic based on `record.status` after payment check. If `record.status` is `"active"`, `"check_failed"`, or `"pending_payment"`, skip to role action.
@@ -201,8 +209,7 @@ When calling `memory_store` or `memory_recall`, you MUST use the correct paramet
    Add one row to `summary_rows`: `@{record.discord_username} | {record.tier} | {effective_status} | expires: {record.expires_at ?? "N/A"} | role: {role_action}`.
 
 4. **Propose role removal** — Post role removal proposals for expired subscribers to Subscribe_Channel for admin approval.
-   - kind: checkpoint
-   - requires_confirmation: true
+   - requires_confirmation: false
 
    For each subscriber where `role_action = "removal_proposed"` from the previous step:
    - Compute `grace_expiry_iso` = ISO 8601 UTC of `(unix(record.grace_started_at) + grace_period_seconds)` seconds.

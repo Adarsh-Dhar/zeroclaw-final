@@ -7899,8 +7899,7 @@ async fn run_sop_maintenance_tick(
                 | zeroclaw_runtime::sop::dispatch::DispatchResult::Deferred { .. }
                 | zeroclaw_runtime::sop::dispatch::DispatchResult::Coalesced { .. } => {
                     // A2: deferred (backpressure) / coalesced triggers did not start a
-                    // run this tick; the cron schedule re-fires them next pass. The
-                    // precise outcome is logged by process_headless_results below.
+                    // run this tick; the cron schedule re-fires them next pass.
                     report.cron_skipped += 1;
                 }
                 zeroclaw_runtime::sop::dispatch::DispatchResult::BlockedUnsafe { .. } => {
@@ -7911,7 +7910,6 @@ async fn run_sop_maintenance_tick(
                 }
             }
         }
-        zeroclaw_runtime::sop::dispatch::process_headless_results(&results);
     }
 
     Some(report)

@@ -7,8 +7,5 @@ execution_mode = "auto"
 enabled = true
 
 [[triggers]]
-type = "manual"
-
-[[triggers]]
 type = "cron"
-expression = "*/5 * * * *"
+expression = "0 * * * *"
