@@ -2058,8 +2058,23 @@ impl SopEngine {
         retry_input: Option<Value>,
         routed_input: Option<Value>,
     ) -> Result<SopRunAction> {
-        let decision =
-            self.route_decision_after_recorded_step(run_id, sop, current_step, last_status)?;
+        let decision = match self.route_decision_after_recorded_step(run_id, sop, current_step, last_status) {
+            Ok(decision) => decision,
+            Err(e) => {
+                // CRITICAL FIX: If routing fails, fail the run to release the claim
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({
+                            "run_id": run_id,
+                            "error": e.to_string(),
+                        })),
+                    "SOP engine: routing failed, forcing run completion to release claim"
+                );
+                return self.finish_run(run_id, SopRunStatus::Failed, Some(format!("routing failed: {e}")));
+            }
+        };
         self.apply_route_decision(
             run_id,
             sop,
@@ -4830,11 +4845,24 @@ impl SopEngine {
             .get(run_id)
             .cloned()
             .ok_or_else(|| anyhow::Error::msg(format!("Active run not found: {run_id}")))?;
+        
+        // Capture claim token BEFORE removing from active_runs
+        let claim_token = Self::claim_handle_for_run(&run);
+        
         run.status = status;
         run.completed_at = Some(now_iso8601());
         let sop_name = run.sop_name.clone();
         let run_id_owned = run.run_id.clone();
-        self.persist_terminal(&run)?;
+        
+        // Attempt persist, but always release claim regardless of outcome
+        let persist_result = self.persist_terminal(&run);
+        
+        // Always release claim, even if persist failed
+        self.release_claim_best_effort(&claim_token);
+        
+        // If persist failed, propagate error but claim is already released
+        persist_result?;
+        
         self.claims_pending_persist.remove(run_id);
         self.claims_retained_after_terminal_rollback.remove(run_id);
         self.active_runs.remove(run_id);
@@ -4877,11 +4905,24 @@ impl SopEngine {
             .get(run_id)
             .cloned()
             .ok_or_else(|| anyhow::Error::msg(format!("Active run not found: {run_id}")))?;
+        
+        // Capture claim token BEFORE removing from active_runs
+        let claim_token = Self::claim_handle_for_run(&run);
+        
         run.status = status;
         run.completed_at = Some(now_iso8601());
         let sop_name = run.sop_name.clone();
         let run_id_owned = run.run_id.clone();
-        self.persist_terminal_with_gate_event(&run, event)?;
+        
+        // Attempt persist, but always release claim regardless of outcome
+        let persist_result = self.persist_terminal_with_gate_event(&run, event);
+        
+        // Always release claim, even if persist failed
+        self.release_claim_best_effort(&claim_token);
+        
+        // If persist failed, propagate error but claim is already released
+        persist_result?;
+        
         self.claims_pending_persist.remove(run_id);
         self.claims_retained_after_terminal_rollback.remove(run_id);
         self.active_runs.remove(run_id);
@@ -4961,6 +5002,16 @@ impl SopEngine {
     }
 
     // ── EPIC C: out-of-band approval plane ──────────────────────────
+
+    /// Force-release a run's claim for admin/manual cleanup. Best-effort:
+    /// logs errors but never fails. Use when a run is stuck and needs to be
+    /// cleared without normal termination.
+    pub fn force_release_claim(&self, run_id: &str) {
+        if let Some(run) = self.active_runs.get(run_id) {
+            let token = Self::claim_handle_for_run(run);
+            self.release_claim_best_effort(&token);
+        }
+    }
 
     /// Read-only config access for the approval resolver.
     pub fn config(&self) -> &SopConfig {

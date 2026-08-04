@@ -196,6 +196,70 @@ pub async fn handle_sop_deny(
     )
 }
 
+/// POST /admin/sop/force-release - force-release a run's claim for manual cleanup.
+/// Use when a run is stuck and needs to be cleared without normal termination.
+pub async fn handle_force_release_claim(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(body): Json<SopResolveBody>,
+) -> Result<impl IntoResponse, JsonErr> {
+    authorize(&state, &peer, &headers)?;
+    let engine = state.sop_engine.as_ref().ok_or_else(sop_disabled)?;
+    let mut guard = engine.lock().map_err(|_| lock_poisoned())?;
+    
+    // Check if run exists
+    if guard.active_runs().contains_key(&body.run_id) {
+        guard.force_release_claim(&body.run_id);
+        
+        // Also attempt to mark as failed to ensure clean state
+        let _ = guard.finish_run(
+            &body.run_id,
+            SopRunStatus::Failed,
+            Some("Manually force-released by admin".to_string()),
+        );
+        
+        Ok((
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "status": "released",
+                "run_id": body.run_id
+            })),
+        ))
+    } else {
+        Ok((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": "Run not found"
+            })),
+        ))
+    }
+}
+
+/// POST /admin/sop/active-runs - list all currently active runs for debugging.
+/// Returns run_id, sop_name, status, current_step, and started_at for each active run.
+pub async fn handle_list_active_runs(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, JsonErr> {
+    authorize(&state, &peer, &headers)?;
+    let engine = state.sop_engine.as_ref().ok_or_else(sop_disabled)?;
+    let guard = engine.lock().map_err(|_| lock_poisoned())?;
+    
+    let active_runs: Vec<_> = guard.active_runs().values().map(|run| {
+        serde_json::json!({
+            "run_id": run.run_id,
+            "sop_name": run.sop_name,
+            "status": run.status,
+            "current_step": run.current_step,
+            "started_at": run.started_at,
+        })
+    }).collect();
+    
+    Ok(Json(serde_json::json!({ "active_runs": active_runs })))
+}
+
 fn resolve(
     state: &AppState,
     run_id: &str,

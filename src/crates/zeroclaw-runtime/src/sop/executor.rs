@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use super::approval::{BrokerOutcome, ResolveOutcome};
 use super::audit::SopAuditLogger;
 use super::engine::SopEngine;
-use super::types::{SopRun, SopRunAction, SopStepResult, StepToolCall};
+use super::types::{SopRun, SopRunAction, SopRunStatus, SopStepResult, StepToolCall};
 
 use crate::agent::history::truncate_tool_result;
 use crate::agent::turn::redact::{scrub_credentials, scrub_credentials_value};
@@ -273,6 +273,13 @@ async fn drive_headless_run(
                             })),
                             "SOP headless driver: failed to advance run"
                         );
+                        
+                        // CRITICAL FIX: Release claim on advance failure to prevent permanent lockout
+                        let mut guard = match engine.lock() {
+                            Ok(g) => g,
+                            Err(poisoned) => poisoned.into_inner(),
+                        };
+                        let _ = guard.finish_run(&run_id, SopRunStatus::Failed, Some(format!("advance_step failed: {e}")));
                         return;
                     }
                 }

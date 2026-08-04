@@ -12,6 +12,10 @@ use std::path::PathBuf;
 
 use super::AppState;
 
+fn is_admin_path(path: &str) -> bool {
+    path.strip_prefix("/admin/").is_some()
+}
+
 #[cfg(feature = "embedded-web")]
 use include_dir::{Dir, include_dir};
 
@@ -37,6 +41,16 @@ pub async fn handle_static(State(state): State<AppState>, uri: Uri) -> Response 
 /// SPA fallback: serve index.html for any non-API, non-static GET request.
 /// Injects `window.__ZEROCLAW_BASE__` so the frontend knows the path prefix.
 pub async fn handle_spa_fallback(State(state): State<AppState>, uri: Uri) -> Response {
+    // Explicitly exclude admin paths from SPA fallback
+    if is_admin_path(uri.path()) {
+        let body = serde_json::json!({
+            "error": "not_found",
+            "message": "Admin endpoint not found.",
+            "path": uri.path(),
+        });
+        return (StatusCode::NOT_FOUND, Json(body)).into_response();
+    }
+
     if let Some(path) = api_fallback_path(uri.path(), &state.path_prefix) {
         let body = serde_json::json!({
             "error": "not_found",
@@ -86,6 +100,8 @@ pub async fn handle_spa_fallback(State(state): State<AppState>, uri: Uri) -> Res
 
 fn api_fallback_path<'a>(path: &'a str, path_prefix: &str) -> Option<&'a str> {
     let path = strip_path_prefix(path, path_prefix);
+    // Return path for API endpoints that don't match routes
+    // Admin paths are excluded in handle_spa_fallback before this is called
     (path == "/api" || path.strip_prefix("/api/").is_some()).then_some(path)
 }
 
