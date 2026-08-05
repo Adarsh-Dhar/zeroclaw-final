@@ -21,8 +21,9 @@ DAEMON_PORT=42617
 MAX_WAIT_SECONDS=60  # Maximum time to wait for run completion
 POLL_INTERVAL=2       # Status poll interval in seconds
 
-# Binary path
-BINARY_PATH="/opt/homebrew/bin/zeroclaw"
+# Binary path (using local build from source)
+BINARY_PATH="$PROJECT_DIR/src/target/release/zeroclaw"
+# BINARY_PATH="/opt/homebrew/bin/zeroclaw"
 
 # Helper functions
 restore_config() {

@@ -6,9 +6,12 @@
 
 set -e
 
-LOG_FILE="health_trend.log"
+SCRIPT_DIR="/Users/adarsh/Documents/zeroclaw/dev-tools"
+LOG_FILE="$SCRIPT_DIR/health_trend.log"
 DAEMON_LOG_DIR="/Users/adarsh/.zeroclaw/logs"
 AUTH_TOKEN="zc_$(grep -A 5 '\[gateway\]' /Users/adarsh/.zeroclaw/config.toml | grep 'paired_tokens' | head -1 || echo '')"
+
+cd "$SCRIPT_DIR"
 
 echo "=== $(date -u +"%Y-%m-%d %H:%M:%S UTC") ===" >> "$LOG_FILE"
 
@@ -100,3 +103,4 @@ echo "" >> "$LOG_FILE"
 
 echo "Health snapshot captured at $(date -u +"%Y-%m-%d %H:%M:%S UTC")"
 echo "Log file: $LOG_FILE"
+echo "Working directory: $SCRIPT_DIR"

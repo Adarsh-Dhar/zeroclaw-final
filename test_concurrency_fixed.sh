@@ -21,9 +21,9 @@ DAEMON_PORT=42617
 MAX_WAIT_SECONDS=120  # Maximum time to wait for run completion
 POLL_INTERVAL=2       # Status poll interval in seconds
 
-# Binary path (can be switched to local build when disk space allows)
-# BINARY_PATH="$PROJECT_DIR/src/target/release/zeroclaw"
-BINARY_PATH="/opt/homebrew/bin/zeroclaw"
+# Binary path (using local build from source)
+BINARY_PATH="$PROJECT_DIR/src/target/release/zeroclaw"
+# BINARY_PATH="/opt/homebrew/bin/zeroclaw"
 
 # Get binary version for traceability
 echo "Binary path: $BINARY_PATH"
@@ -68,7 +68,7 @@ fi
 # Clean up any old test data to prevent claim bleeding
 echo ""
 echo "=== CLEANUP OLD TEST DATA ==="
-TEST_DB="$PROJECT_DIR/data/sop_store.db"
+TEST_DB="$PROJECT_DIR/data/sop/runs.db"
 if [ -f "$TEST_DB" ]; then
     echo "Removing old test database: $TEST_DB"
     rm "$TEST_DB" || echo "Could not remove test database (may not exist)"
@@ -206,7 +206,7 @@ RESPONSE2=$(curl -s -X POST http://127.0.0.1:$DAEMON_PORT/api/sops/$TEST_SOP/run
   -H "Authorization: Bearer $TOKEN" \
   -d '{}')
 
-if echo "$RESPONSE2" | grep -q "cooldown\|concurrency\|limit\|already running"; then
+if echo "$RESPONSE2" | grep -q "cooldown\|concurrency\|limit\|already running\|execution slots full"; then
     echo "✅ Concurrency guard correctly rejected second trigger"
     CONCURRENCY_GUARD_RESULT="PASSED"
 else
@@ -252,18 +252,26 @@ echo "=== CHECKING FOR STUCK CLAIMS ==="
 if [ -f "$TEST_DB" ]; then
     echo "Checking sop_claims table for stuck claims..."
     if command -v sqlite3 &> /dev/null; then
-        STUCK_CLAIMS=$(sqlite3 "$TEST_DB" "SELECT run_id, lease_expires FROM sop_claims WHERE lease_expires > datetime('now')" 2>/dev/null || echo "")
+        # Check for claims from the first run that should have been released
+        STUCK_CLAIMS=$(sqlite3 "$TEST_DB" "SELECT run_id, lease_expires FROM sop_claims WHERE run_id = '$RUN_ID1'" 2>/dev/null || echo "")
         if [ -n "$STUCK_CLAIMS" ]; then
-            echo "❌ STUCK CLAIMS FOUND:"
+            echo "❌ STUCK CLAIMS FOUND FROM FIRST RUN:"
             echo "$STUCK_CLAIMS"
         else
-            echo "✅ No stuck claims found"
+            echo "✅ No stuck claims from first run found"
         fi
     else
         echo "sqlite3 not available, skipping claim check"
     fi
 else
     echo "Test database not found at $TEST_DB"
+fi
+
+# Wait for third run to complete before shutdown
+if [ -n "$RUN_ID3" ]; then
+    echo ""
+    echo "Waiting for third run to complete..."
+    wait_for_run_completion "$RUN_ID3" $MAX_WAIT_SECONDS || echo "⚠️  Third run did not complete within timeout"
 fi
 
 # Graceful shutdown function

@@ -938,6 +938,10 @@ export default {
         
         // Check if response is successful and not blocked
         if (response.ok && !data.includes('"code": 403')) {
+          // Log fallback if this is not the first endpoint
+          if (endpoint !== rpcEndpoints[0]) {
+            console.log(JSON.stringify({ event: 'rpc_fallback_used', from: rpcEndpoints[0], to: endpoint }));
+          }
           // Return Solana RPC response
           return new Response(data, {
             status: response.status,
@@ -950,8 +954,10 @@ export default {
         
         // Store error and try next endpoint
         lastError = `Endpoint ${endpoint} returned: ${data}`;
+        console.log(JSON.stringify({ event: 'rpc_endpoint_failed', endpoint, error: data }));
       } catch (error) {
         lastError = `Endpoint ${endpoint} failed: ${error.message}`;
+        console.log(JSON.stringify({ event: 'rpc_endpoint_failed', endpoint, error: error.message }));
       }
     }
     
