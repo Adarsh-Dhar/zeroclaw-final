@@ -1,0 +1,26 @@
+[sop]
+name = "concurrency_test"
+description = "Simple test SOP for concurrency testing - waits 10 seconds and returns success"
+version = "1.0.0"
+max_concurrent = 1
+execution_mode = "auto"
+enabled = true
+
+[[triggers]]
+type = "manual"
+
+[[steps]]
+kind = "execute"
+number = 1
+title = "Wait 10 seconds"
+body = "Wait for 10 seconds to simulate a long-running operation for concurrency testing."
+requires_confirmation = false
+suggested_tools = []
+
+[[steps]]
+kind = "execute"
+number = 2
+title = "Return success"
+body = "Return success message indicating the concurrency test completed successfully."
+requires_confirmation = false
+suggested_tools = []
