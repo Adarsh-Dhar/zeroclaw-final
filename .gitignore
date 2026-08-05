@@ -2,6 +2,9 @@
 .secret_key
 config.toml
 
+# User data (sanitize before committing)
+wallet_mapping.json
+
 # Database files
 *.db
 *.db-shm

@@ -921,12 +921,13 @@ export default {
       'https://api.devnet.solana.com'
     ];
 
-    // Network fault injection for testing (simulate network interruption)
-    if (url.searchParams.get('simulate_fail') === '1') {
-      await new Promise(r => setTimeout(r, 8000)); // hang like a real stalled connection
-      return new Response('Simulated network failure', { status: 599 });
-    }
-    
+    // DEBUG: Network fault injection for testing (simulate network interruption)
+    // Commented out for production - uncomment for testing network interruption scenarios
+    // if (url.searchParams.get('simulate_fail') === '1') {
+    //   await new Promise(r => setTimeout(r, 8000)); // hang like a real stalled connection
+    //   return new Response('Simulated network failure', { status: 599 });
+    // }
+
     let lastError = null;
     
     // Try each endpoint until one works

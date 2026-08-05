@@ -1,14 +1,14 @@
 {
-  "EYSHit3n1e6qQWKG6L4g34SNoG6P7R9U7y6MGREBLebB": {
-    "discord_user_id": "1531681016249319576",
-    "discord_username": "adrs0890",
+  "EXAMPLE_WALLET_ADDRESS_BASE58_FORMAT": {
+    "discord_user_id": "EXAMPLE_DISCORD_USER_ID",
+    "discord_username": "example_username",
     "status": "lapsed",
     "grace_started_at": null
   },
-  "pt6Ws1FMbdrLbUZqKooediS8mu6SNvDJodzXUx6ypak": {
-    "discord_user_id": "800361404196454431",
-    "discord_username": "adrs2306",
-    "status": "lapsed",
+  "ANOTHER_EXAMPLE_WALLET_ADDRESS": {
+    "discord_user_id": "ANOTHER_EXAMPLE_DISCORD_USER_ID",
+    "discord_username": "another_example",
+    "status": "active",
     "grace_started_at": null
   }
 }
