@@ -920,6 +920,12 @@ export default {
       `https://devnet.helius-rpc.com/?api-key=${env.HELIUS_API_KEY}`,
       'https://api.devnet.solana.com'
     ];
+
+    // Network fault injection for testing (simulate network interruption)
+    if (url.searchParams.get('simulate_fail') === '1') {
+      await new Promise(r => setTimeout(r, 8000)); // hang like a real stalled connection
+      return new Response('Simulated network failure', { status: 599 });
+    }
     
     let lastError = null;
     

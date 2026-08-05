@@ -6,10 +6,17 @@
 
 set -e
 
-SCRIPT_DIR="/Users/adarsh/Documents/zeroclaw/dev-tools"
+SCRIPT_DIR="/Users/adarsh/zeroclaw-health"
 LOG_FILE="$SCRIPT_DIR/health_trend.log"
+ERR_FILE="$SCRIPT_DIR/health_snapshot.err"
 DAEMON_LOG_DIR="/Users/adarsh/.zeroclaw/logs"
 AUTH_TOKEN="zc_$(grep -A 5 '\[gateway\]' /Users/adarsh/.zeroclaw/config.toml | grep 'paired_tokens' | head -1 || echo '')"
+
+# Create directory if it doesn't exist
+mkdir -p "$SCRIPT_DIR"
+
+# Redirect stderr to error file
+exec 2>> "$ERR_FILE"
 
 cd "$SCRIPT_DIR"
 
